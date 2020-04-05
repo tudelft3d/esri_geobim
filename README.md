@@ -26,15 +26,14 @@ but lengthy process (the compilation of all IfcOpenShell dependencies takes
 about an hour on average hardware, five minutes on 32 core machine).
 
     git clone --recursive https://github.com/tudelft3d/esri_geobim
-    cd esri_geobim
-    cd IfcOpenShell/nix
+    cd esri_geobim/IfcOpenShell/nix
     apt-get install git gcc g++ autoconf bison make \
         libfreetype6-dev mesa-common-dev libffi-dev cmake
     python build-all.py IfcConvert
     cd ../../
     mkdir build
     cd build
-    cmake .. -DIFCOPENSHELL_ROOT=../IfcOpenShell
+    cmake .. -DIFCOPENSHELL_ROOT=`pwd`/../IfcOpenShell
     make
     ./tudelft_esri_geobim       
 
