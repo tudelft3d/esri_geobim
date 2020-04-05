@@ -1,0 +1,3 @@
+[submodule "IfcOpenShell"]
+	path = IfcOpenShell
+	url = https://github.com/tudelft3d/IfcOpenShell
