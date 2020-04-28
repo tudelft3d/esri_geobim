@@ -97,7 +97,7 @@ string(REGEX MATCH "#define IFCOPENSHELL_VERSION \"[0-9a-zA-Z\\.\\-]+\"" ifcopen
 string(REGEX MATCH "[0-9]\\.[0-9]" ifcopenshell_major_version "${ifcopenshell_version}")
 message(STATUS "IfcOpenShell version ${ifcopenshell_major_version}")
 
-set(IFC_LIBRARY_NAMES IfcGeom IfcParse geometry_kernel_cgal geometry_kernel_opencascade geometry_kernels geometry_mapping_ifc2x3 geometry_mapping_ifc4 geometry_mapping_ifc4x1 geometry_mapping_ifc4x2 geometry_mappings serializers serializers_ifc2x3 serializers_ifc4 serializers_ifc4x1 serializers_ifc4x2)
+set(IFC_LIBRARY_NAMES IfcGeom IfcParse geometry_kernel_cgal geometry_kernel_opencascade geometry_kernels geometry_mapping_ifc2x3 geometry_mapping_ifc4 geometry_mapping_ifc4x1 geometry_mapping_ifc4x2 geometry_mappings)
 
 if (UNIX)
 set(IFC_LIBRARY_NAMES ${IFC_LIBRARY_NAMES} ${IFC_LIBRARY_NAMES})
