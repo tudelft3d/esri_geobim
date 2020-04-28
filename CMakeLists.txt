@@ -8,8 +8,8 @@ set(OCC_LIBRARY_NAMES TKernel TKMath TKBRep TKGeomBase TKGeomAlgo TKG3d TKG2d TK
 # or
 # BOOST_ROOT
 # 
-                      
-OPTION(USE_STATIC_MSVC_RUNTIME "Link to the static runtime on MSVC." ON)
+        
+OPTION(USE_STATIC_MSVC_RUNTIME "Link to the static runtime on MSVC." OFF)
 
 include(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-std=c++14" COMPILER_SUPPORTS_CXX14)
@@ -130,6 +130,23 @@ if(UNIX)
 else()
     set(BOOST_ROOT       ${IFCOPENSHELL_ROOT}/deps/boost_1_67_0)
     set(BOOST_LIBRARYDIR ${IFCOPENSHELL_ROOT}/deps/boost_1_67_0/stage/vs${MSVC_YEAR}-Win32/lib)
+    
+    set(EIGEN_DIR        ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/Eigen)
+    
+    set(CGAL_INCLUDE_DIR ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/cgal/include)
+    set(CGAL_LIBRARY_DIR ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/cgal/lib)
+
+    file(GLOB CGAL_LIBRARIES "${CGAL_LIBRARY_DIR}/*.lib")
+    
+    set(GMP_INCLUDE_DIR  ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/mpir)
+    set(GMP_LIBRARY_DIR  ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/mpir)
+    
+    file(GLOB GMP_LIBRARIES "${GMP_LIBRARY_DIR}/*.lib")
+    
+    set(MPFR_INCLUDE_DIR  ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/mpfr)
+    set(MPFR_LIBRARY_DIR  ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/mpfr)
+    
+    file(GLOB MPFR_LIBRARIES "${MPFR_LIBRARY_DIR}/*.lib")
 	
     set(IFC_INCLUDE_DIR  ${IFCOPENSHELL_ROOT}/src)
     set(IFC_LIBRARY_DIR  ${IFCOPENSHELL_ROOT}/build-vs${MSVC_YEAR}-x86/${CMAKE_BUILD_TYPE})
@@ -148,6 +165,6 @@ link_directories(${Boost_LIBRARY_DIRS})
 
 add_executable(tudelft_esri_geobim geobim.cpp)
 target_link_libraries(tudelft_esri_geobim ${IFC_LIBRARIES} ${OCC_LIBRARIES} ${CGAL_LIBRARIES}
-    ${MPFR_LIBRARIES} ${GMP_LIBRARIES})
+    ${MPFR_LIBRARIES} ${GMP_LIBRARIES} ${WS2_LIBRARIES})
 
 install(TARGETS tudelft_esri_geobim RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
