@@ -22,10 +22,15 @@ int main (int argc, char** argv) {
 		std::cerr << "[Error] Usage: '" << argv[0] << " <ifc_file> <out_off_file> <dilate_radius_0 .. n>'" << std::endl;
 		return 1;
 	}
-	std::vector<Kernel_::FT> radii;
+
+	// using Kernel_::FT creates weird segfaults, probably due to how ifopsh constructs the box, coordinates components cannot be shared?
+	// std::vector<Kernel_::FT> radii;
+	std::vector<double> radii;
 	for (int i = 3; i < argc; ++i) {
-		radii.emplace_back(CGAL::Gmpq(argv[i]));
+		// radii.push_back(CGAL::Gmpq(argv[i]));
+		radii.push_back(boost::lexical_cast<double>(argv[i]));
 	}
+
 	std::string fn = argv[1];
 	std::string ofn = argv[2];
 	IfcParse::IfcFile f(fn);
