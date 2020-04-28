@@ -15,10 +15,16 @@
 #include <CGAL/Polygon_mesh_processing/bbox.h>
 #include <CGAL/minkowski_sum_3.h>
 
+// @todo use: CGAL::Nef_nary_union_3
+
 int main (int argc, char** argv) {
-	if (argc != 3) {
-		std::cerr << "[Error] Usage: '" << argv[0] << " <ifc_file> <out_obj_file>'";
+	if (argc < 4) {
+		std::cerr << "[Error] Usage: '" << argv[0] << " <ifc_file> <out_off_file> <dilate_radius_0 .. n>'" << std::endl;
 		return 1;
+	}
+	std::vector<Kernel_::FT> radii;
+	for (int i = 3; i < argc; ++i) {
+		radii.emplace_back(CGAL::Gmpq(argv[i]));
 	}
 	std::string fn = argv[1];
 	std::string ofn = argv[2];
@@ -53,10 +59,13 @@ int main (int argc, char** argv) {
 
 	size_t num_created = 0;
 
-	CGAL::Nef_polyhedron_3<Kernel_> all_union;
+	std::vector< CGAL::Nef_polyhedron_3<Kernel_> > all_union(radii.size());
+	std::vector< CGAL::Nef_polyhedron_3<Kernel_> > cubes;
 
-	auto polycube = ifcopenshell::geometry::utils::create_cube(0.01);
-	auto cube = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+	for (auto& r : radii) {
+		auto polycube = ifcopenshell::geometry::utils::create_cube(r);
+		cubes.push_back(ifcopenshell::geometry::utils::create_nef_polyhedron(polycube));
+	}
 
 	for (;; ++num_created) {
 		bool has_more = true;
@@ -110,58 +119,100 @@ int main (int argc, char** argv) {
 				continue;
 			}
 
-			all_union += CGAL::minkowski_sum_3(part_nef, cube);
+			auto uit = all_union.begin();
+			auto cit = cubes.begin();
+			for (; uit != all_union.end(); ++uit, ++cit) {
+				(*uit) += CGAL::minkowski_sum_3(part_nef, (*cit));
+			}
 
 			std::cout << geom_object->product()->data().toString() << std::endl;
 		}
 	}
 
-	auto poly = ifcopenshell::geometry::utils::create_polyhedron(all_union);
+	auto uit = all_union.begin();
+	auto rit = radii.begin();
+	auto cit = cubes.begin();
 
-	{
-		std::ofstream fs("poly.off");
-		fs.precision(12);
-		fs << poly;
-	}
+	for (; uit != all_union.end(); ++uit, ++rit, ++cit) {
 
-	Kernel_::FT maxx = -1e9;
-	cgal_shape_t::Vertex_handle left_most_vertex;
-	for (auto it = poly.edges_begin(); it != poly.edges_end(); ++it) {
-		auto vx = it->vertex()->point().cartesian(0);
-		if (vx > maxx) {
-			maxx = vx;
-			left_most_vertex = it->vertex();
+		std::stringstream ss;
+		ss << (*rit);
+		std::string radius_string = ss.str();
+		std::string fn1 = ofn + "-full-" + radius_string + ".off";
+		std::string fn2 = ofn + "-dilated-" + radius_string + ".off";
+		std::string fn3 = ofn + "-" + radius_string + ".off";
+
+		auto poly = ifcopenshell::geometry::utils::create_polyhedron(*uit);
+
+		{
+			std::ofstream fs(fn1.c_str());
+			fs.precision(12);
+			fs << poly;
 		}
-	}
 
-	std::set<cgal_shape_t::Facet_handle> empty;
-	auto connected = connected_faces(left_most_vertex->halfedge()->facet(), empty);
-
-	std::set<cgal_shape_t::Facet_handle> outer_facets(connected.begin(), connected.end());
-
-	/*
-	std::set<cgal_shape_t::Halfedge_handle> outer_edges;
-	for (auto& f : outer_facets) {
-		auto begin = f->facet_begin();
-		auto it = begin;
-		do {
-			outer_edges.insert(it);
-		} while (++it != begin);
-	}
-	*/
-
-	while (std::distance(poly.facets_begin(), poly.facets_end()) > outer_facets.size()) {
-		for (auto it = poly.facets_begin(); it != poly.facets_end(); ++it) {
-			if (outer_facets.find(&*it) == outer_facets.end()) {
-				poly.erase_connected_component(it->halfedge());
-				break;
+		Kernel_::FT maxx = -1e9;
+		cgal_shape_t::Vertex_handle left_most_vertex;
+		for (auto it = poly.edges_begin(); it != poly.edges_end(); ++it) {
+			auto vx = it->vertex()->point().cartesian(0);
+			if (vx > maxx) {
+				maxx = vx;
+				left_most_vertex = it->vertex();
 			}
 		}
-	}
 
-	{
-		std::ofstream fs(ofn.c_str());
-		fs.precision(12);
-		fs << poly;
+		std::set<cgal_shape_t::Facet_handle> empty;
+		auto connected = connected_faces(left_most_vertex->halfedge()->facet(), empty);
+
+		std::set<cgal_shape_t::Facet_handle> outer_facets(connected.begin(), connected.end());
+
+		/*
+		std::set<cgal_shape_t::Halfedge_handle> outer_edges;
+		for (auto& f : outer_facets) {
+			auto begin = f->facet_begin();
+			auto it = begin;
+			do {
+				outer_edges.insert(it);
+			} while (++it != begin);
+		}
+		*/
+
+		while (std::distance(poly.facets_begin(), poly.facets_end()) > outer_facets.size()) {
+			for (auto it = poly.facets_begin(); it != poly.facets_end(); ++it) {
+				if (outer_facets.find(&*it) == outer_facets.end()) {
+					poly.erase_connected_component(it->halfedge());
+					break;
+				}
+			}
+		}
+
+		{
+			std::ofstream fs(fn2.c_str());
+			fs.precision(12);
+			fs << poly;
+		}
+
+		auto exterior_nef = ifcopenshell::geometry::utils::create_nef_polyhedron(poly);
+
+		// Create the complement of the Nef by subtracting from its bounding box,
+		// see: https://github.com/tudelft3d/ifc2citygml/blob/master/off2citygml/Minkowski.cpp#L23
+		auto bounding_box = CGAL::Polygon_mesh_processing::bbox(poly);
+		Kernel_::Point_3 bbmin (bounding_box.xmin(), bounding_box.ymin(), bounding_box.zmin());
+		Kernel_::Point_3 bbmax (bounding_box.xmax(), bounding_box.ymax(), bounding_box.zmax());
+		Kernel_::Vector_3 d(*rit, *rit, *rit);
+		bbmin = CGAL::ORIGIN + ((bbmin - CGAL::ORIGIN) - d);
+		bbmax = CGAL::ORIGIN + ((bbmin - CGAL::ORIGIN) + d);
+		auto bbpoly = ifcopenshell::geometry::utils::create_cube(bbmin, bbmax);
+		auto bbnef = ifcopenshell::geometry::utils::create_nef_polyhedron(bbpoly);
+		auto complement = bbnef - exterior_nef;
+		auto padded = CGAL::minkowski_sum_3(complement, (*cit));
+
+		exterior_nef -= padded;
+		ifcopenshell::geometry::utils::create_polyhedron(exterior_nef);
+
+		{
+			std::ofstream fs(fn3.c_str());
+			fs.precision(12);
+			fs << poly;
+		}
 	}
 }
