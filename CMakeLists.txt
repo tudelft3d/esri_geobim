@@ -165,6 +165,6 @@ link_directories(${Boost_LIBRARY_DIRS})
 
 add_executable(tudelft_esri_geobim geobim.cpp)
 target_link_libraries(tudelft_esri_geobim ${IFC_LIBRARIES} ${OCC_LIBRARIES} ${CGAL_LIBRARIES}
-    ${MPFR_LIBRARIES} ${GMP_LIBRARIES} ${WS2_LIBRARIES})
+    ${MPFR_LIBRARIES} ${GMP_LIBRARIES} ${WS2_LIBRARIES} ${Boost_LIBRARIES})
 
 install(TARGETS tudelft_esri_geobim RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}/bin)
