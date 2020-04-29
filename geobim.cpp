@@ -21,30 +21,73 @@
 #include <CGAL/AABB_traits.h>
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
 
+#include <boost/program_options.hpp>
+#include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/classification.hpp>
+
 typedef CGAL::AABB_face_graph_triangle_primitive<cgal_shape_t, CGAL::Default, CGAL::Tag_false> Primitive;
 typedef CGAL::AABB_traits<Kernel_, Primitive> AAbbTraits;
 typedef CGAL::AABB_tree<AAbbTraits> AAbbTree;
 
+namespace po = boost::program_options;
 
-int main (int argc, char** argv) {
+int main(int argc, char** argv) {
+	std::string fn, ofn, entities;
 
-	typedef CGAL::Box_intersection_d::Box_with_handle_d<double, 3, size_t> Box;
+	typedef po::command_line_parser command_line_parser;
+	po::options_description options("Command line options");
+	options.add_options()
+		("help,h", "display usage information")
+		("version,v", "display version information")
+		("debug,d", "more verbose log messages")
+		("openings,o", "whether to process opening subtractions")
+		("entities,e", new po::typed_value<std::string, char>(&entities), "semicolon separated list of IFC entities to include")
+		("input-file", new po::typed_value<std::string, char>(&fn), "input IFC file")
+		("output-file", new po::typed_value<std::string, char>(&ofn), "output OBJ file")
+		("radii", boost::program_options::value<std::vector<std::string>>()->multitoken());
 
-	if (argc < 4) {
-		std::cerr << "[Error] Usage: '" << argv[0] << " [-d] [-e=IfcWall;IfcSlab;...] [-o] <ifc_file> <out_obj_file> <dilate_radius_0 .. n>'" << std::endl;
+	po::positional_options_description positional_options;
+	positional_options.add("input-file", 1);
+	positional_options.add("output-file", 1);
+	positional_options.add("radii", -1);
+
+	po::variables_map vmap;
+	try {
+		po::store(command_line_parser(argc, argv).
+			options(options).positional(positional_options).run(), vmap);
+	} catch (const std::exception& e) {
+		std::cerr << e.what() << std::endl;
+	}
+
+	po::notify(vmap);
+
+	if (vmap.count("version")) {
+		return 0;
+	} else if (vmap.count("help")) {
+		return 0;
+	} else if (!vmap.count("input-file")) {
 		return 1;
 	}
 
-	// using Kernel_::FT creates weird segfaults, probably due to how ifopsh constructs the box, coordinates components cannot be shared?
-	// std::vector<Kernel_::FT> radii;
-	std::vector<double> radii;
-	for (int i = 3; i < argc; ++i) {
-		// radii.push_back(CGAL::Gmpq(argv[i]));
-		radii.push_back(boost::lexical_cast<double>(argv[i]));
+	if (!vmap.count("output-file")) {
+		ofn = fn + ".obj";
 	}
 
-	std::string fn = argv[1];
-	std::string ofn = argv[2];
+	// using Kernel_::FT creates weird segfaults, probably due to how ifopsh constructs the box, coordinates components cannot be shared?
+	std::vector<double> radii;
+	const auto& radii_str = vmap["radii"].as<std::vector<std::string>>();
+	std::transform(radii_str.begin(), radii_str.end(), std::back_inserter(radii), [](const std::string& s) {
+		// radii.push_back(CGAL::Gmpq(argv[i]));
+		return boost::lexical_cast<double>(s);
+	});
+
+	if (radii.empty()) {
+		radii.push_back(0.01);
+	}
+
+	const bool apply_openings = vmap.count("openings");
+	const bool debug = vmap.count("debug");
+
 	IfcParse::IfcFile f(fn);
 
 	if (!f.good()) {
@@ -58,17 +101,23 @@ int main (int argc, char** argv) {
 	settings.set(ifcopenshell::geometry::settings::SEW_SHELLS, true);
 	settings.set(ifcopenshell::geometry::settings::CONVERT_BACK_UNITS, true);
 	settings.set(ifcopenshell::geometry::settings::DISABLE_TRIANGULATION, true);
-	settings.set(ifcopenshell::geometry::settings::DISABLE_OPENING_SUBTRACTIONS, true);
+	settings.set(ifcopenshell::geometry::settings::DISABLE_OPENING_SUBTRACTIONS, apply_openings);
 
-	std::vector<ifcopenshell::geometry::filter_t> no_openings_and_spaces = {
-		IfcGeom::entity_filter(false, false, {"IfcOpeningElement", "IfcSpace"})
+	std::set<std::string> entity_name_set = { "IfcWall", "IfcSlab" };
+	if (vmap.count("entities")) {
+		std::vector<std::string> tokens;
+		boost::split(tokens, vmap["entities"].as<std::string>(), boost::is_any_of(";"));
+		if (!tokens.empty()) {
+			entity_name_set.clear();
+			entity_name_set.insert(tokens.begin(), tokens.end());
+		}
+	}
+
+	std::vector<ifcopenshell::geometry::filter_t> filters = {
+		IfcGeom::entity_filter(true, false, entity_name_set)
 	};
 
-	std::vector<ifcopenshell::geometry::filter_t> walls_and_slabs = {
-		IfcGeom::entity_filter(true, false, {"IfcWall", "IfcSlab"})
-	};
-
-	ifcopenshell::geometry::Iterator context_iterator("cgal", settings, &f, walls_and_slabs);
+	ifcopenshell::geometry::Iterator context_iterator("cgal", settings, &f, filters);
 
 	if (!context_iterator.initialize()) {
 		return 1;
@@ -85,7 +134,6 @@ int main (int argc, char** argv) {
 	std::map<std::pair<double, std::pair<double, double>>, decltype(styles)::iterator> diffuse_to_style;
 	// style 0 is for elements without style annotations
 	styles.emplace_back();
-	std::vector<Box> facet_boxes_with_styles;
 	std::list<cgal_shape_t> triangulated_shape_memory;
 	std::map<cgal_shape_t::Facet_handle, decltype(styles)::const_iterator> facet_to_style;
 
