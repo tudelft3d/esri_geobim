@@ -29,6 +29,8 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include <chrono>
+
 typedef CGAL::AABB_face_graph_triangle_primitive<cgal_shape_t, CGAL::Default, CGAL::Tag_false> Primitive;
 typedef CGAL::AABB_traits<Kernel_, Primitive> AAbbTraits;
 typedef CGAL::AABB_tree<AAbbTraits> AAbbTree;
@@ -147,6 +149,7 @@ struct radius_execution_context : public execution_context {
 	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > union_collector;
 	CGAL::Nef_polyhedron_3<Kernel_> padding_cube, boolean_result, exterior, bounding_box, complement, complement_padded;
 	cgal_shape_t polyhedron, polyhedron_exterior;
+	enum extract_component { INTERIOR, EXTERIOR };
 
 	radius_execution_context(double r) : radius(r) {
 		auto polycube = ifcopenshell::geometry::utils::create_cube(r);
@@ -158,7 +161,7 @@ struct radius_execution_context : public execution_context {
 	}
 
 	// Extract the exterior component of a CGAL Polyhedron
-	cgal_shape_t extract_exterior(const cgal_shape_t& input) const {
+	cgal_shape_t extract(const cgal_shape_t& input, extract_component component) const {
 		// Input is going to be mutated, so make a copy first
 		cgal_shape_t input_copy = input;
 
@@ -172,18 +175,23 @@ struct radius_execution_context : public execution_context {
 			}
 		}
 
-		std::set<cgal_shape_t::Facet_handle> empty;
-		auto connected = connected_faces(left_most_vertex->halfedge()->facet(), empty);
+		
+		if (component == EXTERIOR) {
+			std::set<cgal_shape_t::Facet_handle> empty;
+			auto connected = connected_faces(left_most_vertex->halfedge()->facet(), empty);
 
-		std::set<cgal_shape_t::Facet_handle> outer_facets(connected.begin(), connected.end());
+			std::set<cgal_shape_t::Facet_handle> outer_facets(connected.begin(), connected.end());
 
-		while (std::distance(input_copy.facets_begin(), input_copy.facets_end()) > outer_facets.size()) {
-			for (auto it = input_copy.facets_begin(); it != input_copy.facets_end(); ++it) {
-				if (outer_facets.find(&*it) == outer_facets.end()) {
-					input_copy.erase_connected_component(it->halfedge());
-					break;
+			while (std::distance(input_copy.facets_begin(), input_copy.facets_end()) > outer_facets.size()) {
+				for (auto it = input_copy.facets_begin(); it != input_copy.facets_end(); ++it) {
+					if (outer_facets.find(&*it) == outer_facets.end()) {
+						input_copy.erase_connected_component(it->halfedge());
+						break;
+					}
 				}
 			}
+		} else {
+			input_copy.erase_connected_component(left_most_vertex->halfedge());
 		}
 
 		return input_copy;
@@ -207,20 +215,38 @@ struct radius_execution_context : public execution_context {
 	void finalize() {
 		boolean_result = union_collector.get_union();
 		polyhedron = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
-		polyhedron_exterior = extract_exterior(polyhedron);
+		polyhedron_exterior = extract(polyhedron, EXTERIOR);
 		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
 		bounding_box = create_bounding_box(polyhedron);
 		complement = bounding_box - exterior;
 		complement.extract_regularization();
 		complement_padded = CGAL::minkowski_sum_3(complement, padding_cube);
 		complement_padded.extract_regularization();
+
+		auto start = std::chrono::steady_clock::now();
+#if 0
 		// @todo I imagine this operation is costly, we can also convert the padded complement to
 		// polyhedron, and remove the connected component that belongs to the bbox, then reverse
 		// the remaining poly to point to the interior?
-		// or: extract_interior?
 		exterior -= complement_padded;
+#else
+		// Marginally faster.
+
+		// Re above: extracting the interior shell did not prove to be reliable even with
+		// the undocumented function convert_inner_shell_to_polyhedron(). Therefore we
+		// subtract from the padded box as that will have lower complexity than above.
+		// Mark_bounded_volumes on the completement also did not work.
+		auto box_padded = CGAL::minkowski_sum_3(bounding_box, padding_cube);
+		auto exterior = box_padded - complement_padded;
+#endif
+		auto end = std::chrono::steady_clock::now();
+		std::cout << "conversion back took " << std::chrono::duration<double, std::milli>(end-start).count() << " ms" << endl;
+
 		exterior.extract_regularization();
 		polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
+
+		auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
+		std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
 	}
 };
 
