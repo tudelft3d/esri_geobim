@@ -31,18 +31,121 @@
 
 #include <chrono>
 
-typedef CGAL::AABB_face_graph_triangle_primitive<cgal_shape_t, CGAL::Default, CGAL::Tag_false> Primitive;
-typedef CGAL::AABB_traits<Kernel_, Primitive> AAbbTraits;
-typedef CGAL::AABB_tree<AAbbTraits> AAbbTree;
+typedef CGAL::AABB_face_graph_triangle_primitive<cgal_shape_t, CGAL::Default, CGAL::Tag_false> Primitive1;
+typedef CGAL::AABB_traits<Kernel_, Primitive1> AAbbTraits1;
+typedef CGAL::AABB_tree<AAbbTraits1> AAbbTree1;
+
+typedef CGAL::AABB_face_graph_triangle_primitive<cgal_shape_t, CGAL::Default, CGAL::Tag_false> Primitive2;
+typedef CGAL::AABB_traits<CGAL::Simple_cartesian<double>, Primitive2> AAbbTraits2;
+typedef CGAL::AABB_tree<AAbbTraits2> AAbbTree2;
+
 
 namespace po = boost::program_options;
+
+class timer_class {
+	typedef std::map<std::string, double> timings_map;
+	timings_map timings_;
+
+public:
+	// @todo something like a scoped_stopwatch using RAII
+	class stopwatch {
+		typedef std::chrono::time_point<std::chrono::steady_clock> timepoint;
+		std::string key;
+		timepoint start_, stop_;
+		timings_map& timings;
+
+	public:
+		stopwatch(timings_map& timings) : timings(timings) {}
+		stopwatch& start(const std::string& s) {
+			key = s;
+			start_ = std::chrono::steady_clock::now();
+			return *this;
+		}
+		void stop() {
+			stop_ = std::chrono::steady_clock::now();
+			timings[key] += std::chrono::duration<double>(stop_ - start_).count();
+		}
+	};
+
+	stopwatch measure(const std::string& s) {
+		return stopwatch(timings_).start(s);
+	}
+
+	void print(std::ostream& s) const {
+		size_t max_key_length = 0;
+		for (auto& p : timings_) {
+			if (p.first.size() > max_key_length) {
+				max_key_length = p.first.size();
+			}
+		}
+		for (auto& p : timings_) {
+			s << p.first << std::string(max_key_length - p.first.size(), ' ') << ":" << p.second << std::endl;
+		}
+	}
+};
+
+static timer_class timer;
+
+// OBJ writer for CGAL facets paired with a style
+struct simple_obj_writer {
+	int group_id = 1;
+	int vertex_count = 1;
+	std::ofstream obj, mtl;
+	ifcopenshell::geometry::taxonomy::colour BLACK;
+
+	simple_obj_writer(const std::string& fn_prefix)
+		: obj((fn_prefix + ".obj").c_str())
+		, mtl((fn_prefix + ".mtl").c_str()) {
+		obj << "mtllib " << fn_prefix << ".mtl\n";
+		BLACK.components = Eigen::Vector3d(0., 0., 0.);
+	}
+
+	std::array<Kernel_::Point_3, 3> points_from_facet(cgal_shape_t::Facet_handle f) {
+		return {
+				f->facet_begin()->vertex()->point(),
+				f->facet_begin()->next()->vertex()->point(),
+				f->facet_begin()->next()->next()->vertex()->point()
+		};
+	}
+
+	std::array<Kernel_::Point_3, 3> points_from_facet(std::list<cgal_shape_t::Facet_handle>::iterator f) {
+		return points_from_facet(*f);
+	}
+	
+	template <typename It>
+	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
+		auto diffuse = style ? style->diffuse.get_value_or(BLACK).components : BLACK.components;
+
+		obj << "g group-" << group_id << "\n";
+		obj << "usemtl m" << group_id << "\n";
+		mtl << "newmtl m" << group_id << "\n";
+		mtl << "kd " << diffuse(0) << " " << diffuse(1) << " " << diffuse(2) << "\n";
+
+		group_id++;
+
+		for (auto it = begin; it != end; ++it) {
+			auto points = points_from_facet(it);
+			for (int i = 0; i < 3; ++i) {
+				obj << "v "
+					<< points[i].cartesian(0) << " "
+					<< points[i].cartesian(1) << " "
+					<< points[i].cartesian(2) << "\n";
+			}
+			obj << "f "
+				<< (vertex_count + 0) << " "
+				<< (vertex_count + 1) << " "
+				<< (vertex_count + 2) << "\n";
+			vertex_count += 3;
+		}
+	}
+};
 
 // Global settings that are derived from the command line invocation
 // parsed by Boost.ProgramOptions
 struct geobim_settings {
 	std::string input_filename, output_filename;
 	std::vector<double> radii;
-	bool apply_openings, debug;
+	bool apply_openings, apply_openings_posthoc, debug;
 	ifcopenshell::geometry::settings settings;
 	std::set<std::string> entity_names;
 	IfcParse::IfcFile* file;
@@ -50,10 +153,13 @@ struct geobim_settings {
 
 // Generated for every representation *item* in the IFC file
 struct shape_callback_item {
+	IfcUtil::IfcBaseEntity* src;
 	std::string id, type;
 	cgal_shape_t polyhedron;
 	CGAL::Nef_polyhedron_3<Kernel_> nef_polyhedron;
 	boost::optional<ifcopenshell::geometry::taxonomy::style> style;
+	boost::optional<Eigen::Vector3d> wall_direction;
+	std::list<shape_callback_item*> openings;
 };
 
 // Prototype of a context to which processed shapes will be fed
@@ -61,20 +167,51 @@ struct execution_context {
 	virtual void operator()(shape_callback_item&) = 0;
 };
 
+struct opening_collector : public execution_context {
+	std::list<shape_callback_item> list;
+	std::map<IfcUtil::IfcBaseEntity*, IfcUtil::IfcBaseEntity*> opening_to_elem;
+	std::multimap<IfcUtil::IfcBaseEntity*, shape_callback_item*> map;
+
+	opening_collector(IfcParse::IfcFile* f) {
+		auto rels = f->instances_by_type("IfcRelVoidsElement");
+		for (auto& rel : *rels) {
+			auto be = (IfcUtil::IfcBaseEntity*) ((IfcUtil::IfcBaseEntity*)rel)->get_value<IfcUtil::IfcBaseClass*>("RelatingBuildingElement");
+			auto op = (IfcUtil::IfcBaseEntity*) ((IfcUtil::IfcBaseEntity*)rel)->get_value<IfcUtil::IfcBaseClass*>("RelatedOpeningElement");
+			opening_to_elem.insert({ op, be });
+		}
+	}
+
+	void operator()(shape_callback_item& item) {
+		auto opit = opening_to_elem.find(item.src);
+		if (opit != opening_to_elem.end()) {
+			list.push_back(item);
+			map.insert({ opit->second, &list.back() });
+		}
+	}
+};
+
+
+
 // State that is relevant accross the different radii for which the
 // program is executed. Mostly related for the mapping back to
 // semantics from the original IFC input.
 struct global_execution_context : public execution_context {
-	AAbbTree tree;
+	AAbbTree1 tree;
+	AAbbTree2 tree_simple;
 
 	std::list<ifcopenshell::geometry::taxonomy::style> styles;
 	std::map<std::pair<double, std::pair<double, double>>, decltype(styles)::iterator> diffuse_to_style;
+
+	typedef CGAL::Polyhedron_3<CGAL::Simple_cartesian<double>> SimplePoly;
 
 	// A reference is kept to the original shapes in a std::list.
 	// Later an aabb tree is used map eroded triangle centroids
 	// back to the original elements to preserve semantics.
 	std::list<cgal_shape_t> triangulated_shape_memory;
 	std::map<cgal_shape_t::Facet_handle, decltype(styles)::const_iterator> facet_to_style;
+
+	std::list<SimplePoly> simple_shape_memory;
+	std::map<SimplePoly::Facet_handle, decltype(styles)::const_iterator> simple_facet_to_style;
 
 	global_execution_context() {
 		// style 0 is for elements without style annotations
@@ -157,7 +294,63 @@ struct radius_execution_context : public execution_context {
 	}
 
 	void operator()(shape_callback_item& item) {
-		union_collector.add_polyhedron(CGAL::minkowski_sum_3(item.nef_polyhedron, padding_cube));
+		CGAL::Nef_polyhedron_3<Kernel_> result;
+
+		auto T0 = timer.measure("minkowski_sum");
+		result = CGAL::minkowski_sum_3(item.nef_polyhedron, padding_cube);
+		T0.stop();
+
+		auto T1 = timer.measure("opening_handling");
+		if (item.wall_direction && item.openings.size()) {
+			static const Eigen::Vector3d Zax(0, 0, 1);
+			// @todo derive from model.
+			// @todo since many walls will be parallel we can cache these polyhedrons
+			static const double EPS = 1.e-5;
+
+			auto Yax = Zax.cross(*item.wall_direction).normalized();
+
+			auto x0 = *item.wall_direction * -radius;
+			auto x1 = *item.wall_direction * +radius;
+
+			auto y0 = Yax * -(radius + EPS);
+			auto y1 = Yax * +(radius + EPS);
+
+			Kernel_::Point_3 X0(x0(0), x0(1), x0(2));
+			Kernel_::Point_3 X1(x1(0), x1(1), x1(2));
+
+			Kernel_::Point_3 Y0(y0(0), y0(1), y0(2));
+			Kernel_::Point_3 Y1(y1(0), y1(1), y1(2));
+
+			Kernel_::Point_3 Z0(0, 0, -radius);
+			Kernel_::Point_3 Z1(0, 0, +radius);
+
+			CGAL::Nef_polyhedron_3<Kernel_> X(CGAL::Segment_3<Kernel_>(X0, X1));
+			CGAL::Nef_polyhedron_3<Kernel_> Y(CGAL::Segment_3<Kernel_>(Y0, Y1));
+			CGAL::Nef_polyhedron_3<Kernel_> Z(CGAL::Segment_3<Kernel_>(Z0, Z1));
+			auto ZX = CGAL::minkowski_sum_3(X, Z);
+
+			CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > opening_union;
+			for (auto& op : item.openings) {
+				auto bounds = create_bounding_box(op->polyhedron);
+				auto temp = bounds - op->nef_polyhedron;
+				temp = CGAL::minkowski_sum_3(ZX, temp);
+				temp = bounds - temp;
+				temp = CGAL::minkowski_sum_3(temp, Y);
+
+#ifdef GEOBIM_DEBUG
+				simple_obj_writer x("opening-" + op->id);
+				x(nullptr, item.polyhedron.facets_begin(), item.polyhedron.facets_end());
+				x(nullptr, op->polyhedron.facets_begin(), op->polyhedron.facets_end());
+				CGAL::Polyhedron_3<Kernel_> temp2;
+				temp.convert_to_polyhedron(temp2);
+				x(nullptr, temp2.facets_begin(), temp2.facets_end());
+#endif
+
+				result -= temp;
+			}
+		}
+		T1.stop();
+		union_collector.add_polyhedron(result);
 	}
 
 	// Extract the exterior component of a CGAL Polyhedron
@@ -199,6 +392,11 @@ struct radius_execution_context : public execution_context {
 
 	// Create a bounding box (six-faced Nef poly) around a CGAL Polyhedron
 	CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t& input) const {
+		// @todo we can probably use
+		// CGAL::Nef_polyhedron_3<Kernel_> nef(CGAL::Nef_polyhedron_3<Kernel_>::COMPLETE)
+		// Implementation detail: there is always an implicit box around the Nef, even when open or closed.
+		// Never mind: The Minkowski sum cannot operate on unbounded inputs...
+
 		// Create the complement of the Nef by subtracting from its bounding box,
 		// see: https://github.com/tudelft3d/ifc2citygml/blob/master/off2citygml/Minkowski.cpp#L23
 		auto bounding_box = CGAL::Polygon_mesh_processing::bbox(input);
@@ -213,7 +411,13 @@ struct radius_execution_context : public execution_context {
 
 	// Completes the boolean union, extracts exterior and erodes padding radius
 	void finalize() {
-		boolean_result = union_collector.get_union();
+		{
+			auto T = timer.measure("nef_boolean_union");
+			boolean_result = union_collector.get_union();
+			T.stop();
+		}
+
+		auto T2 = timer.measure("result_nef_processing");
 		polyhedron = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
 		polyhedron_exterior = extract(polyhedron, EXTERIOR);
 		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
@@ -222,28 +426,32 @@ struct radius_execution_context : public execution_context {
 		complement.extract_regularization();
 		complement_padded = CGAL::minkowski_sum_3(complement, padding_cube);
 		complement_padded.extract_regularization();
+		T2.stop();
 
-		auto start = std::chrono::steady_clock::now();
+		{
+			auto T = timer.measure("result_nef_to_poly");
 #if 0
-		// @todo I imagine this operation is costly, we can also convert the padded complement to
-		// polyhedron, and remove the connected component that belongs to the bbox, then reverse
-		// the remaining poly to point to the interior?
-		exterior -= complement_padded;
+			// @todo I imagine this operation is costly, we can also convert the padded complement to
+			// polyhedron, and remove the connected component that belongs to the bbox, then reverse
+			// the remaining poly to point to the interior?
+			exterior -= complement_padded;
 #else
-		// Marginally faster.
+			// Rougly twice as fast as the complexity is half (box complexity is negligable).
 
-		// Re above: extracting the interior shell did not prove to be reliable even with
-		// the undocumented function convert_inner_shell_to_polyhedron(). Therefore we
-		// subtract from the padded box as that will have lower complexity than above.
-		// Mark_bounded_volumes on the completement also did not work.
-		auto box_padded = CGAL::minkowski_sum_3(bounding_box, padding_cube);
-		auto exterior = box_padded - complement_padded;
+			// Re above: extracting the interior shell did not prove to be reliable even with
+			// the undocumented function convert_inner_shell_to_polyhedron(). Therefore we
+			// subtract from the padded box as that will have lower complexity than above.
+			// Mark_bounded_volumes on the completement also did not work.
+			exterior = bounding_box - complement_padded;
 #endif
-		auto end = std::chrono::steady_clock::now();
-		std::cout << "conversion back took " << std::chrono::duration<double, std::milli>(end-start).count() << " ms" << endl;
+			T.stop();
+		}
 
 		exterior.extract_regularization();
+
+		auto T1 = timer.measure("result_nef_to_poly");
 		polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
+		T1.stop();
 
 		auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
 		std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
@@ -261,6 +469,8 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 		("version,v", "display version information")
 		("debug,d", "more verbose log messages")
 		("openings,o", "whether to process opening subtractions")
+		("timings,t", "print timings after execution")
+		("openings-posthoc,O", "whether to process opening subtractions posthoc")
 		("entities,e", new po::typed_value<std::string, char>(&entities), "semicolon separated list of IFC entities to include")
 		("input-file", new po::typed_value<std::string, char>(&settings.input_filename), "input IFC file")
 		("output-file", new po::typed_value<std::string, char>(&settings.output_filename), "output OBJ file")
@@ -305,6 +515,7 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 	}
 
 	settings.apply_openings = vmap.count("openings");
+	settings.apply_openings_posthoc = vmap.count("openings-posthoc");
 	settings.debug = vmap.count("debug");
 
 	settings.file = new IfcParse::IfcFile(settings.input_filename);
@@ -337,23 +548,43 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 // Interprets IFC geometries by means of IfcOpenShell CGAL and
 // pass result to callback
 template <typename Fn>
-int process_geometries(geobim_settings& settings, Fn fn) {
+int process_geometries(geobim_settings& settings, Fn& fn) {
+
+	opening_collector all_openings(settings.file);
+
+	// Capture all openings beforehand, they are later assigned to the
+	// building elements.
+	auto opening_settings = settings;
+	opening_settings.entity_names = { "IfcOpeningElement" };
+	if (settings.apply_openings_posthoc && settings.entity_names != opening_settings.entity_names) {
+		process_geometries(opening_settings, all_openings);
+	}
+
 	std::vector<ifcopenshell::geometry::filter_t> filters = {
 		IfcGeom::entity_filter(true, false, settings.entity_names)
 	};
 
 	ifcopenshell::geometry::Iterator context_iterator("cgal", settings.settings, settings.file, filters);
 
+	auto T = timer.measure("ifc_geometry_processing");
 	if (!context_iterator.initialize()) {
 		return 1;
 	}
+	T.stop();
 
 	size_t num_created = 0;
+
+	auto axis_settings = settings.settings;
+	axis_settings.set(ifcopenshell::geometry::settings::EXCLUDE_SOLIDS_AND_SURFACES, true);
+	axis_settings.set(ifcopenshell::geometry::settings::INCLUDE_CURVES, true);
+	auto geometry_mapper = ifcopenshell::geometry::impl::mapping_implementations().construct(settings.file, axis_settings);
 
 	for (;; ++num_created) {
 		bool has_more = true;
 		if (num_created) {
+			auto T0 = timer.measure("ifc_geometry_processing");
 			has_more = context_iterator.next();
+			T0.stop();
 		}
 		ifcopenshell::geometry::NativeElement* geom_object = nullptr;
 		if (has_more) {
@@ -363,20 +594,54 @@ int process_geometries(geobim_settings& settings, Fn fn) {
 			break;
 		}
 
+		const auto& n = geom_object->transformation().data().components;
+		const cgal_placement_t trsf2(
+			n(0, 0), n(0, 1), n(0, 2), n(0, 3),
+			n(1, 0), n(1, 1), n(1, 2), n(1, 3),
+			n(2, 0), n(2, 1), n(2, 2), n(2, 3));
+
+		boost::optional<Eigen::Vector3d> wall_direction;
+
+
+		std::list<shape_callback_item*> openings;
+
+		auto p = all_openings.map.equal_range(geom_object->product());
+		for (auto it = p.first; it != p.second; ++it) {
+			openings.push_back(it->second);
+		}
+
+		if (settings.apply_openings_posthoc && geom_object->product()->declaration().is("IfcWall")) {
+			auto T2 = timer.measure("wall_axis_handling");
+			auto item = geometry_mapper->map(geom_object->product());
+			typedef ifcopenshell::geometry::taxonomy::collection cl;
+			typedef ifcopenshell::geometry::taxonomy::loop l;
+			typedef ifcopenshell::geometry::taxonomy::edge e;
+			typedef ifcopenshell::geometry::taxonomy::point3 p;
+			auto edge = (e*)((l*)((cl*)((cl*)item)->children[0])->children[0])->children[0];
+			if (edge->basis == nullptr && edge->start.which() == 0 && edge->end.which() == 0) {
+				auto p0 = boost::get<p>(edge->start);
+				auto p1 = boost::get<p>(edge->end);
+				Eigen::Vector4d P0;
+				P0 << p0.components, 1.;
+				Eigen::Vector4d P1;
+				P1 << p1.components, 1.;
+				auto V0 = n * P0;
+				auto V1 = n * P1;
+				std::cout << "Axis " << V0(0) << " " << V0(1) << " " << V0(2) << " -> "
+					<< V1(0) << " " << V1(1) << " " << V1(2) << std::endl;
+				wall_direction = (V1 - V0).head<3>().normalized();
+			}
+			T2.stop();
+		}
+
 		for (auto& g : geom_object->geometry()) {
 			auto s = ((ifcopenshell::geometry::CgalShape*) g.Shape())->shape();
 			const auto& m = g.Placement().components;
-			const auto& n = geom_object->transformation().data().components;
-
+			
 			const cgal_placement_t trsf(
 				m(0, 0), m(0, 1), m(0, 2), m(0, 3),
 				m(1, 0), m(1, 1), m(1, 2), m(1, 3),
 				m(2, 0), m(2, 1), m(2, 2), m(2, 3));
-
-			const cgal_placement_t trsf2(
-				n(0, 0), n(0, 1), n(0, 2), n(0, 3),
-				n(1, 0), n(1, 1), n(1, 2), n(1, 3),
-				n(2, 0), n(2, 1), n(2, 2), n(2, 3));
 
 			// Apply transformation
 			for (auto &vertex : vertices(s)) {
@@ -388,18 +653,23 @@ int process_geometries(geobim_settings& settings, Fn fn) {
 				opt_style = g.Style();
 			}
 
+			auto T1 = timer.measure("ifc_element_to_nef");
 			CGAL::Nef_polyhedron_3<Kernel_> part_nef = ifcopenshell::geometry::utils::create_nef_polyhedron(s);
+			T1.stop();
 
 			if (part_nef.is_empty() || !part_nef.is_simple()) {
 				continue;
 			}
 
 			fn(shape_callback_item{
+				geom_object->product(),
 				geom_object->guid(),
 				geom_object->type(),
 				s,
 				part_nef,
-				opt_style });
+				opt_style,
+				wall_direction,
+				openings });
 
 			std::cout << "Processed: " << geom_object->product()->data().toString() << std::endl;
 		}
@@ -415,54 +685,6 @@ struct shape_callback {
 	void operator()(shape_callback_item& item) {
 		for (auto& c : contexts) {
 			(*c)(item);
-		}
-	}
-};
-
-// OBJ writer for CGAL facets paired with a style
-struct simple_obj_writer {
-	int group_id = 1;
-	int vertex_count = 1;
-	std::ofstream obj, mtl;
-	ifcopenshell::geometry::taxonomy::colour BLACK;
-
-	simple_obj_writer(const std::string& fn_prefix)
-		: obj((fn_prefix + ".obj").c_str())
-		, mtl((fn_prefix + ".mtl").c_str())
-	{
-		obj << "mtllib " << fn_prefix << ".mtl\n";
-		BLACK.components = Eigen::Vector3d(0., 0., 0.);
-	}
-
-	template <typename It>
-	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
-		auto diffuse = style ? style->diffuse.get_value_or(BLACK).components : BLACK.components;
-		
-		obj << "g group-" << group_id << "\n";
-		obj << "usemtl m" << group_id << "\n";
-		mtl << "newmtl m" << group_id << "\n";	
-		mtl << "kd " << diffuse(0) << " " << diffuse(1) << " " << diffuse(2) << "\n";
-
-		group_id++;
-
-		for (auto it = begin; it != end; ++it) {
-			auto& f = *it;
-			Kernel_::Point_3 points[] = {
-				f->facet_begin()->vertex()->point(),
-				f->facet_begin()->next()->vertex()->point(),
-				f->facet_begin()->next()->next()->vertex()->point()
-			};
-			for (int i = 0; i < 3; ++i) {
-				obj << "v "
-					<< points[i].cartesian(0) << " "
-					<< points[i].cartesian(1) << " "
-					<< points[i].cartesian(2) << "\n";
-			}
-			obj << "f "
-				<< (vertex_count + 0) << " "
-				<< (vertex_count + 1) << " "
-				<< (vertex_count + 2) << "\n";
-			vertex_count += 3;
 		}
 	}
 };
@@ -489,11 +711,15 @@ int main(int argc, char** argv) {
 
 	for (auto& c : radius_contexts) {
 		c.finalize();
+		auto T0 = timer.measure("semantic_segmentation");
 		auto style_facet_pairs = global_context.segment(c.polyhedron_exterior);
+		T0.stop();
 
 		simple_obj_writer write_obj(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
 		for (auto& p : style_facet_pairs) {
 			write_obj(p.first, p.second.begin(), p.second.end());
 		}
 	}
+
+	timer.print(std::cout);
 }
