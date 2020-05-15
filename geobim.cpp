@@ -31,13 +31,70 @@
 
 #include <chrono>
 
-typedef CGAL::AABB_face_graph_triangle_primitive<cgal_shape_t, CGAL::Default, CGAL::Tag_false> Primitive1;
-typedef CGAL::AABB_traits<Kernel_, Primitive1> AAbbTraits1;
-typedef CGAL::AABB_tree<AAbbTraits1> AAbbTree1;
+// Can be used to convert polyhedron from exact to inexact and vice-versa
+template <class Polyhedron_input,
+	class Polyhedron_output>
+	struct Copy_polyhedron_to
+	: public CGAL::Modifier_base<typename Polyhedron_output::HalfedgeDS> {
+	Copy_polyhedron_to(const Polyhedron_input& in_poly)
+		: in_poly(in_poly) {}
 
-typedef CGAL::AABB_face_graph_triangle_primitive<cgal_shape_t, CGAL::Default, CGAL::Tag_false> Primitive2;
-typedef CGAL::AABB_traits<CGAL::Simple_cartesian<double>, Primitive2> AAbbTraits2;
-typedef CGAL::AABB_tree<AAbbTraits2> AAbbTree2;
+	void operator()(typename Polyhedron_output::HalfedgeDS& out_hds) {
+		typedef typename Polyhedron_output::HalfedgeDS Output_HDS;
+		typedef typename Polyhedron_input::HalfedgeDS Input_HDS;
+
+		CGAL::Polyhedron_incremental_builder_3<Output_HDS> builder(out_hds);
+
+		typedef typename Polyhedron_input::Vertex_const_iterator Vertex_const_iterator;
+		typedef typename Polyhedron_input::Facet_const_iterator  Facet_const_iterator;
+		typedef typename Polyhedron_input::Halfedge_around_facet_const_circulator HFCC;
+
+		CGAL::Cartesian_converter<
+			Polyhedron_input::Traits::Kernel,
+			Polyhedron_output::Traits::Kernel> converter;
+
+		builder.begin_surface(in_poly.size_of_vertices(),
+			in_poly.size_of_facets(),
+			in_poly.size_of_halfedges());
+
+		for (Vertex_const_iterator
+			vi = in_poly.vertices_begin(), end = in_poly.vertices_end();
+			vi != end; ++vi) {
+			builder.add_vertex(converter(vi->point()));
+		}
+
+		typedef CGAL::Inverse_index<Vertex_const_iterator> Index;
+		Index index(in_poly.vertices_begin(), in_poly.vertices_end());
+
+		for (Facet_const_iterator
+			fi = in_poly.facets_begin(), end = in_poly.facets_end();
+			fi != end; ++fi) {
+			HFCC hc = fi->facet_begin();
+			HFCC hc_end = hc;
+			builder.begin_facet();
+			do {
+				builder.add_vertex_to_facet(index[hc->vertex()]);
+				++hc;
+			} while (hc != hc_end);
+			builder.end_facet();
+		}
+		builder.end_surface();
+	} // end operator()(..)
+	private:
+		const Polyhedron_input& in_poly;
+}; // end Copy_polyhedron_to<>
+
+template <class Poly_B, class Poly_A>
+typename std::enable_if<std::is_same<Poly_A, Poly_B>::value>::type poly_copy(Poly_B& poly_b, const Poly_A& poly_a) {
+	poly_b = poly_a;
+}
+
+template <class Poly_B, class Poly_A>
+typename std::enable_if<!std::is_same<Poly_A, Poly_B>::value>::type poly_copy(Poly_B& poly_b, const Poly_A& poly_a) {
+	poly_b.clear();
+	Copy_polyhedron_to<Poly_A, Poly_B> modifier(poly_a);
+	poly_b.delegate(modifier);
+}
 
 
 namespace po = boost::program_options;
@@ -145,7 +202,7 @@ struct simple_obj_writer {
 struct geobim_settings {
 	std::string input_filename, output_filename;
 	std::vector<double> radii;
-	bool apply_openings, apply_openings_posthoc, debug;
+	bool apply_openings, apply_openings_posthoc, debug, exact_segmentation;
 	ifcopenshell::geometry::settings settings;
 	std::set<std::string> entity_names;
 	IfcParse::IfcFile* file;
@@ -195,23 +252,23 @@ struct opening_collector : public execution_context {
 // State that is relevant accross the different radii for which the
 // program is executed. Mostly related for the mapping back to
 // semantics from the original IFC input.
+template <typename TreeKernel>
 struct global_execution_context : public execution_context {
-	AAbbTree1 tree;
-	AAbbTree2 tree_simple;
+	typedef CGAL::Polyhedron_3<TreeKernel> TreeShapeType;
+	typedef CGAL::AABB_face_graph_triangle_primitive<TreeShapeType, CGAL::Default, CGAL::Tag_false> Primitive;
+	typedef CGAL::AABB_traits<TreeKernel, Primitive> AAbbTraits;
+	typedef CGAL::AABB_tree<AAbbTraits> AAbbTree;
+
+	AAbbTree tree;
 
 	std::list<ifcopenshell::geometry::taxonomy::style> styles;
 	std::map<std::pair<double, std::pair<double, double>>, decltype(styles)::iterator> diffuse_to_style;
 
-	typedef CGAL::Polyhedron_3<CGAL::Simple_cartesian<double>> SimplePoly;
-
 	// A reference is kept to the original shapes in a std::list.
 	// Later an aabb tree is used map eroded triangle centroids
 	// back to the original elements to preserve semantics.
-	std::list<cgal_shape_t> triangulated_shape_memory;
-	std::map<cgal_shape_t::Facet_handle, decltype(styles)::const_iterator> facet_to_style;
-
-	std::list<SimplePoly> simple_shape_memory;
-	std::map<SimplePoly::Facet_handle, decltype(styles)::const_iterator> simple_facet_to_style;
+	std::list<TreeShapeType> triangulated_shape_memory;
+	std::map<typename TreeShapeType::Facet_handle, decltype(styles)::const_iterator> facet_to_style;
 
 	global_execution_context() {
 		// style 0 is for elements without style annotations
@@ -237,11 +294,14 @@ struct global_execution_context : public execution_context {
 			}
 		}
 
-		triangulated_shape_memory.push_back(item.polyhedron);
+		TreeShapeType tree_polyhedron;
+		poly_copy(tree_polyhedron, item.polyhedron);
+
+		triangulated_shape_memory.push_back(tree_polyhedron);
 		CGAL::Polygon_mesh_processing::triangulate_faces(triangulated_shape_memory.back());
 		tree.insert(faces(triangulated_shape_memory.back()).first, faces(triangulated_shape_memory.back()).second, triangulated_shape_memory.back());
 		for (auto& f : faces(triangulated_shape_memory.back())) {
-			cgal_shape_t::Facet_handle F = f;
+			TreeShapeType::Facet_handle F = f;
 			facet_to_style.insert({ F, sit });
 		}
 	}
@@ -262,11 +322,13 @@ struct global_execution_context : public execution_context {
 			result[i].first = i ? &*it : nullptr;
 		}
 
+		CGAL::Cartesian_converter<Kernel_,TreeKernel> converter;
+
 		for (auto &f : faces(input)) {
 			auto O = CGAL::centroid(
-				f->facet_begin()->vertex()->point(),
-				f->facet_begin()->next()->vertex()->point(),
-				f->facet_begin()->next()->next()->vertex()->point()
+				converter(f->facet_begin()->vertex()->point()),
+				converter(f->facet_begin()->next()->vertex()->point()),
+				converter(f->facet_begin()->next()->next()->vertex()->point())
 			);
 			auto pair = tree.closest_point_and_primitive(O);
 			auto it = facet_to_style.find(pair.second);
@@ -470,6 +532,7 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 		("debug,d", "more verbose log messages")
 		("openings,o", "whether to process opening subtractions")
 		("timings,t", "print timings after execution")
+		("exact-segmentation,e", "use exact kernel in proximity tree for semantic association (not recommended)")
 		("openings-posthoc,O", "whether to process opening subtractions posthoc")
 		("entities,e", new po::typed_value<std::string, char>(&entities), "semicolon separated list of IFC entities to include")
 		("input-file", new po::typed_value<std::string, char>(&settings.input_filename), "input IFC file")
@@ -516,6 +579,7 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 
 	settings.apply_openings = vmap.count("openings");
 	settings.apply_openings_posthoc = vmap.count("openings-posthoc");
+	settings.exact_segmentation = vmap.count("exact-segmentation");
 	settings.debug = vmap.count("debug");
 
 	settings.file = new IfcParse::IfcFile(settings.input_filename);
@@ -693,26 +757,44 @@ int main(int argc, char** argv) {
 	geobim_settings settings;
 	parse_command_line(settings, argc, argv);
 
-	global_execution_context global_context;
+	global_execution_context<CGAL::Simple_cartesian<double>> global_context;
+	global_execution_context<Kernel_> global_context_exact;
+
 	std::vector<radius_execution_context> radius_contexts;
 	for (double r : settings.radii) {
 		radius_contexts.emplace_back(r);
 	}
 
 	shape_callback callback;
-	callback.contexts.push_back(&global_context);
+	if (settings.exact_segmentation) {
+		callback.contexts.push_back(&global_context_exact);
+	} else {
+		callback.contexts.push_back(&global_context);
+	}
 	for (auto& c : radius_contexts) {
 		callback.contexts.push_back(&c);
 	}
 
 	process_geometries(settings, callback);
 
-	global_context.finalize();
-
+	auto T1 = timer.measure("semantic_segmentation");
+	if (settings.exact_segmentation) {
+		global_context_exact.finalize();
+	} else {
+		global_context.finalize();
+	}
+	T1.stop();
+	
 	for (auto& c : radius_contexts) {
 		c.finalize();
+
 		auto T0 = timer.measure("semantic_segmentation");
-		auto style_facet_pairs = global_context.segment(c.polyhedron_exterior);
+		global_execution_context<Kernel_>::segmentation_return_type style_facet_pairs;
+		if (settings.exact_segmentation) {
+			style_facet_pairs = global_context_exact.segment(c.polyhedron_exterior);
+		} else {
+			style_facet_pairs = global_context.segment(c.polyhedron_exterior);
+		}
 		T0.stop();
 
 		simple_obj_writer write_obj(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
