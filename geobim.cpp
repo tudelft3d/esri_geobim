@@ -346,13 +346,24 @@ struct global_execution_context : public execution_context {
 struct radius_execution_context : public execution_context {
 	double radius;
 	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > union_collector;
-	CGAL::Nef_polyhedron_3<Kernel_> padding_cube, boolean_result, exterior, bounding_box, complement, complement_padded;
+	CGAL::Nef_polyhedron_3<Kernel_> padding_cube, padding_cube_2, boolean_result, exterior, bounding_box, complement, complement_padded;
 	cgal_shape_t polyhedron, polyhedron_exterior;
 	enum extract_component { INTERIOR, EXTERIOR };
 
-	radius_execution_context(double r) : radius(r) {
-		auto polycube = ifcopenshell::geometry::utils::create_cube(r);
-		padding_cube = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+	radius_execution_context(double r, bool narrower = false) : radius(r) {
+		{
+			auto polycube = ifcopenshell::geometry::utils::create_cube(r);
+			padding_cube = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+		}
+		if (narrower) {
+			// double r2 = boost::math::float_advance(r, +5);
+			double r2 = r + 1e-7;
+			std::cout << r << " -> " << r2 << std::endl;
+			auto polycube = ifcopenshell::geometry::utils::create_cube(r2);
+			padding_cube_2 = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+		} else {
+			padding_cube_2 = padding_cube;
+		}
 	}
 
 	void operator()(shape_callback_item& item) {
@@ -486,7 +497,9 @@ struct radius_execution_context : public execution_context {
 		bounding_box = create_bounding_box(polyhedron);
 		complement = bounding_box - exterior;
 		complement.extract_regularization();
-		complement_padded = CGAL::minkowski_sum_3(complement, padding_cube);
+		// @nb padding cube is potentially slightly larger to result in a thinner result
+		// then another radius for comparison.
+		complement_padded = CGAL::minkowski_sum_3(complement, padding_cube_2);
 		complement_padded.extract_regularization();
 		T2.stop();
 
@@ -517,6 +530,52 @@ struct radius_execution_context : public execution_context {
 
 		auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
 		std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
+	}
+};
+
+struct radius_comparison {
+	struct hollow_solid {
+		typedef CGAL::Nef_polyhedron_3<Kernel_> nef;
+
+		nef bbox, complement, complement_padded, inner, hollow, cube;
+
+		double D;
+
+		hollow_solid(radius_execution_context& a, double d) {
+			D = d;
+			bbox = a.create_bounding_box(a.polyhedron_exterior);
+			complement = bbox - a.exterior;
+			complement.extract_regularization();
+			auto polycube = ifcopenshell::geometry::utils::create_cube(d);
+			cube = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+			complement_padded = CGAL::minkowski_sum_3(complement, cube);
+			complement_padded.extract_regularization();
+			inner = bbox - complement_padded;
+			inner.extract_regularization();
+			{
+				auto inner_poly = ifcopenshell::geometry::utils::create_polyhedron(inner);
+				simple_obj_writer obj("debug-inner-" + boost::lexical_cast<std::string>(D));
+				obj(nullptr, inner_poly.facets_begin(), inner_poly.facets_end());
+			}
+			hollow = a.exterior - inner;
+			hollow.extract_regularization();
+		}
+	};
+
+	typedef CGAL::Nef_polyhedron_3<Kernel_> nef;
+	typedef CGAL::Polyhedron_3<Kernel_> poly;
+
+	nef difference_nef;
+	poly difference_poly;
+	hollow_solid A, B;
+
+	radius_comparison(radius_execution_context& a, radius_execution_context& b, double d)
+//		: A(a, d), B(b, boost::math::float_advance(d, -10))
+		: A(a, d), B(b, d - 2e-7)
+	{
+		difference_nef = B.hollow - A.hollow;
+		difference_nef.extract_regularization();
+		difference_poly = ifcopenshell::geometry::utils::create_polyhedron(difference_nef);
 	}
 };
 
@@ -572,6 +631,7 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 		// radii.push_back(CGAL::Gmpq(argv[i]));
 		return boost::lexical_cast<double>(s);
 	});
+	std::sort(settings.radii.begin(), settings.radii.end());
 
 	if (settings.radii.empty()) {
 		settings.radii.push_back(0.01);
@@ -761,8 +821,11 @@ int main(int argc, char** argv) {
 	global_execution_context<Kernel_> global_context_exact;
 
 	std::vector<radius_execution_context> radius_contexts;
+	bool first = true;
 	for (double r : settings.radii) {
-		radius_contexts.emplace_back(r);
+		// 2nd is narrower
+		radius_contexts.emplace_back(r, !first);
+		first = false;
 	}
 
 	shape_callback callback;
@@ -802,6 +865,17 @@ int main(int argc, char** argv) {
 			write_obj(p.first, p.second.begin(), p.second.end());
 		}
 	}
+
+	auto T2 = timer.measure("difference_overlay");
+	auto it = radius_contexts.begin();
+	for (auto jt = it + 1; jt != radius_contexts.end(); ++it, ++jt) {
+		radius_comparison difference(*it, *jt, 0.001);
+		simple_obj_writer obj("difference-"
+			+ boost::lexical_cast<std::string>(it->radius) + "-"
+			+ boost::lexical_cast<std::string>(jt->radius));
+		obj(nullptr, difference.difference_poly.facets_begin(), difference.difference_poly.facets_end());
+	}
+	T2.stop();
 
 	timer.print(std::cout);
 }
