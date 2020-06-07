@@ -10,6 +10,8 @@
  // -o --entities=IfcWall;IfcSlab;IfcWindow;IfcDoor x.ifc y 0.01 0.1
  // --entities=IfcWall;IfcSlab x y 0.01 0.1
 
+#define ENSURE_2ND_OP_NARROWER
+
 #include <ifcgeom/kernels/cgal/CgalKernel.h>
 #include <ifcgeom/schema_agnostic/IfcGeomFilter.h>
 #include <ifcgeom/schema_agnostic/IfcGeomIterator.h>
@@ -343,6 +345,15 @@ struct global_execution_context : public execution_context {
 };
 
 // State (polyhedra mostly) that are relevant only for one radius
+struct capturing_execution_context : public execution_context {
+	std::list<shape_callback_item> items;
+
+	void operator()(shape_callback_item& item) {
+		items.push_back(item);
+	}
+};
+
+// State (polyhedra mostly) that are relevant only for one radius
 struct radius_execution_context : public execution_context {
 	double radius;
 	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > union_collector;
@@ -355,15 +366,17 @@ struct radius_execution_context : public execution_context {
 			auto polycube = ifcopenshell::geometry::utils::create_cube(r);
 			padding_cube = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
 		}
+
+#ifdef ENSURE_2ND_OP_NARROWER
 		if (narrower) {
 			// double r2 = boost::math::float_advance(r, +5);
 			double r2 = r + 1e-7;
 			std::cout << r << " -> " << r2 << std::endl;
 			auto polycube = ifcopenshell::geometry::utils::create_cube(r2);
 			padding_cube_2 = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
-		} else {
-			padding_cube_2 = padding_cube;
-		}
+		} else // -> ...
+#endif
+		padding_cube_2 = padding_cube;
 	}
 
 	void operator()(shape_callback_item& item) {
@@ -486,15 +499,18 @@ struct radius_execution_context : public execution_context {
 	void finalize() {
 		{
 			auto T = timer.measure("nef_boolean_union");
+			// @todo spatial sorting?
 			boolean_result = union_collector.get_union();
 			T.stop();
 		}
 
 		auto T2 = timer.measure("result_nef_processing");
 		polyhedron = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
+		// @todo Wasteful: remove interior on Nef?
 		polyhedron_exterior = extract(polyhedron, EXTERIOR);
 		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
 		bounding_box = create_bounding_box(polyhedron);
+
 		complement = bounding_box - exterior;
 		complement.extract_regularization();
 		// @nb padding cube is potentially slightly larger to result in a thinner result
@@ -532,6 +548,12 @@ struct radius_execution_context : public execution_context {
 		std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
 	}
 };
+
+#ifdef ENSURE_2ND_OP_NARROWER
+#define MAKE_OP2_NARROWER -2e-7
+#else
+#define MAKE_OP2_NARROWER
+#endif
 
 struct radius_comparison {
 	struct hollow_solid {
@@ -571,7 +593,7 @@ struct radius_comparison {
 
 	radius_comparison(radius_execution_context& a, radius_execution_context& b, double d)
 //		: A(a, d), B(b, boost::math::float_advance(d, -10))
-		: A(a, d), B(b, d - 2e-7)
+		: A(a, d), B(b, d MAKE_OP2_NARROWER)
 	{
 		difference_nef = B.hollow - A.hollow;
 		difference_nef.extract_regularization();
@@ -626,15 +648,17 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 	}
 
 	// using Kernel_::FT creates weird segfaults, probably due to how ifopsh constructs the box, coordinates components cannot be shared?
-	const auto& radii_str = vmap["radii"].as<std::vector<std::string>>();
-	std::transform(radii_str.begin(), radii_str.end(), std::back_inserter(settings.radii), [](const std::string& s) {
-		// radii.push_back(CGAL::Gmpq(argv[i]));
-		return boost::lexical_cast<double>(s);
-	});
-	std::sort(settings.radii.begin(), settings.radii.end());
+	if (vmap.count("radii")) {
+		const auto& radii_str = vmap["radii"].as<std::vector<std::string>>();
+		std::transform(radii_str.begin(), radii_str.end(), std::back_inserter(settings.radii), [](const std::string& s) {
+			// radii.push_back(CGAL::Gmpq(argv[i]));
+			return boost::lexical_cast<double>(s);
+		});
+		std::sort(settings.radii.begin(), settings.radii.end());
+	}
 
 	if (settings.radii.empty()) {
-		settings.radii.push_back(0.01);
+		// Binary search will be used.
 	}
 
 	settings.apply_openings = vmap.count("openings");
@@ -674,7 +698,8 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 template <typename Fn>
 int process_geometries(geobim_settings& settings, Fn& fn) {
 
-	opening_collector all_openings(settings.file);
+	// @todo static now to prevent being gc'ed
+	static opening_collector all_openings(settings.file);
 
 	// Capture all openings beforehand, they are later assigned to the
 	// building elements.
@@ -813,6 +838,58 @@ struct shape_callback {
 	}
 };
 
+template <typename It>
+double initialize_radius_context_and_get_volume_with_cache(It first, It second, double radius) {
+	static std::map<double, double> cache_;
+
+	auto it = cache_.find(radius);
+	if (it != cache_.end()) {
+		std::cout << "Used cache for R=" << radius << " V=" << it->second << std::endl;
+		return it->second;
+	}
+
+	radius_execution_context rec(radius, false);
+	// Unfortunately for_each() is by value so needs to be wrapped in a lambda with side effects
+	std::for_each(first, second, [&rec](auto& v) {
+		rec(v);
+	});
+	rec.finalize();
+	double V = CGAL::to_double(CGAL::Polygon_mesh_processing::volume(rec.polyhedron_exterior));
+
+	std::cout << "Calculated for R=" << radius << " V=" << V << std::endl;
+
+	cache_.insert(it, { radius , V });
+	return V;
+}
+
+template <typename It>
+double binary_search(It first, It second, std::pair<double, double> range) {
+	double abc[3];
+	std::tie(abc[0], abc[2]) = range;
+
+	std::cout << "Testing " << abc[0] << " and " << abc[2] << std::endl;
+
+	auto a_vol = initialize_radius_context_and_get_volume_with_cache(first, second, abc[0]);
+	auto b_vol = initialize_radius_context_and_get_volume_with_cache(first, second, abc[2]);
+
+	if (a_vol * 1.1 < b_vol) {
+		if ((abc[2] - abc[0]) < 1.e-4) {
+			std::cout << "Terminating search at " << abc[0] << " and " << abc[2] << std::endl;
+			return (abc[0] + abc[2]) / 2.;
+		}
+
+		abc[1] = (abc[0] + abc[2]) / 2.;
+		for (int i = 1; i >= 0; --i) {
+			auto r = binary_search(first, second, { abc[i], abc[i+1] });
+			if (r != abc[i + 1]) {
+				return r;
+			}
+		}
+	}
+
+	return abc[2];
+}
+
 int main(int argc, char** argv) {
 	geobim_settings settings;
 	parse_command_line(settings, argc, argv);
@@ -820,62 +897,72 @@ int main(int argc, char** argv) {
 	global_execution_context<CGAL::Simple_cartesian<double>> global_context;
 	global_execution_context<Kernel_> global_context_exact;
 
-	std::vector<radius_execution_context> radius_contexts;
-	bool first = true;
-	for (double r : settings.radii) {
-		// 2nd is narrower
-		radius_contexts.emplace_back(r, !first);
-		first = false;
-	}
-
 	shape_callback callback;
 	if (settings.exact_segmentation) {
 		callback.contexts.push_back(&global_context_exact);
 	} else {
 		callback.contexts.push_back(&global_context);
 	}
-	for (auto& c : radius_contexts) {
-		callback.contexts.push_back(&c);
-	}
 
-	process_geometries(settings, callback);
-
-	auto T1 = timer.measure("semantic_segmentation");
-	if (settings.exact_segmentation) {
-		global_context_exact.finalize();
+	if (settings.radii.empty()) {
+		auto cec = new capturing_execution_context;
+		callback.contexts.push_back(cec);
+		process_geometries(settings, callback);
+		auto R = binary_search(cec->items.begin(), cec->items.end(), { 1.e-3, 0.2 });
+		std::cout << "Largest gap found with R ~ " << (R * 2.) << std::endl;
 	} else {
-		global_context.finalize();
-	}
-	T1.stop();
-	
-	for (auto& c : radius_contexts) {
-		c.finalize();
+		std::vector<radius_execution_context> radius_contexts;
+		bool first = true;
+		for (double r : settings.radii) {
+			// 2nd is narrower (depending on ifdef above, appears to be necessary).
+			radius_contexts.emplace_back(r, !first);
+			first = false;
+		}
 
-		auto T0 = timer.measure("semantic_segmentation");
-		global_execution_context<Kernel_>::segmentation_return_type style_facet_pairs;
+		for (auto& c : radius_contexts) {
+			callback.contexts.push_back(&c);
+		}
+
+		process_geometries(settings, callback);
+
+		auto T1 = timer.measure("semantic_segmentation");
 		if (settings.exact_segmentation) {
-			style_facet_pairs = global_context_exact.segment(c.polyhedron_exterior);
+			global_context_exact.finalize();
 		} else {
-			style_facet_pairs = global_context.segment(c.polyhedron_exterior);
+			global_context.finalize();
 		}
-		T0.stop();
+		T1.stop();
 
-		simple_obj_writer write_obj(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
-		for (auto& p : style_facet_pairs) {
-			write_obj(p.first, p.second.begin(), p.second.end());
+		for (auto& c : radius_contexts) {
+			c.finalize();
+
+			auto T0 = timer.measure("semantic_segmentation");
+			global_execution_context<Kernel_>::segmentation_return_type style_facet_pairs;
+			if (settings.exact_segmentation) {
+				style_facet_pairs = global_context_exact.segment(c.polyhedron_exterior);
+			} else {
+				style_facet_pairs = global_context.segment(c.polyhedron_exterior);
+			}
+			T0.stop();
+
+			simple_obj_writer write_obj(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
+			for (auto& p : style_facet_pairs) {
+				write_obj(p.first, p.second.begin(), p.second.end());
+			}
 		}
-	}
 
-	auto T2 = timer.measure("difference_overlay");
-	auto it = radius_contexts.begin();
-	for (auto jt = it + 1; jt != radius_contexts.end(); ++it, ++jt) {
-		radius_comparison difference(*it, *jt, 0.001);
-		simple_obj_writer obj("difference-"
-			+ boost::lexical_cast<std::string>(it->radius) + "-"
-			+ boost::lexical_cast<std::string>(jt->radius));
-		obj(nullptr, difference.difference_poly.facets_begin(), difference.difference_poly.facets_end());
+		auto T2 = timer.measure("difference_overlay");
+		auto it = radius_contexts.begin();
+		for (auto jt = it + 1; jt != radius_contexts.end(); ++it, ++jt) {
+			radius_comparison difference(*it, *jt, 0.001);
+			simple_obj_writer obj("difference-"
+				+ boost::lexical_cast<std::string>(it->radius) + "-"
+				+ boost::lexical_cast<std::string>(jt->radius));
+			obj(nullptr, difference.difference_poly.facets_begin(), difference.difference_poly.facets_end());
+		}
+		T2.stop();
+
 	}
-	T2.stop();
 
 	timer.print(std::cout);
 }
