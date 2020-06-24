@@ -31,6 +31,8 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+#include <nlohmann/json.hpp>
+
 #include <chrono>
 
 // Can be used to convert polyhedron from exact to inexact and vice-versa
@@ -145,20 +147,7 @@ public:
 
 static timer_class timer;
 
-// OBJ writer for CGAL facets paired with a style
-struct simple_obj_writer {
-	int group_id = 1;
-	int vertex_count = 1;
-	std::ofstream obj, mtl;
-	ifcopenshell::geometry::taxonomy::colour BLACK;
-
-	simple_obj_writer(const std::string& fn_prefix)
-		: obj((fn_prefix + ".obj").c_str())
-		, mtl((fn_prefix + ".mtl").c_str()) {
-		obj << "mtllib " << fn_prefix << ".mtl\n";
-		BLACK.components = Eigen::Vector3d(0., 0., 0.);
-	}
-
+struct abstract_writer {
 	std::array<Kernel_::Point_3, 3> points_from_facet(cgal_shape_t::Facet_handle f) {
 		return {
 				f->facet_begin()->vertex()->point(),
@@ -170,10 +159,26 @@ struct simple_obj_writer {
 	std::array<Kernel_::Point_3, 3> points_from_facet(std::list<cgal_shape_t::Facet_handle>::iterator f) {
 		return points_from_facet(*f);
 	}
+};
+
+// OBJ writer for CGAL facets paired with a style
+struct simple_obj_writer : public abstract_writer {
+	int group_id = 1;
+	int vertex_count = 1;
+	std::ofstream obj, mtl;
+	ifcopenshell::geometry::taxonomy::colour BLACK;
+
+	simple_obj_writer(const std::string& fn_prefix)
+		: obj((fn_prefix + ".obj").c_str())
+		, mtl((fn_prefix + ".mtl").c_str())
+		, BLACK(0., 0., 0.) 
+	{
+		obj << "mtllib " << fn_prefix << ".mtl\n";
+	}
 	
 	template <typename It>
 	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
-		auto diffuse = style ? style->diffuse.get_value_or(BLACK).components : BLACK.components;
+		const auto& diffuse = *(style ? style->diffuse.get_value_or(BLACK).components : BLACK.components);
 
 		obj << "g group-" << group_id << "\n";
 		obj << "usemtl m" << group_id << "\n";
@@ -196,6 +201,91 @@ struct simple_obj_writer {
 				<< (vertex_count + 2) << "\n";
 			vertex_count += 3;
 		}
+	}
+};
+
+struct city_json_writer : public abstract_writer {
+	ifcopenshell::geometry::taxonomy::colour BLACK;
+
+	using json = nlohmann::json;
+
+	std::string filename;
+
+	std::vector<std::array<double, 3>> vertices;
+	std::vector<std::vector<std::vector<std::vector<int>>>> boundaries;
+	std::vector<std::vector<int>> boundary_materials;
+
+	json materials;
+
+	city_json_writer(const std::string& fn_prefix)
+		: filename(fn_prefix + ".json")
+		, materials(json::array())
+		, BLACK(0., 0., 0.)
+	{
+		// assumes one solid.
+		boundaries.emplace_back();
+		boundary_materials.emplace_back();
+	}
+
+	template <typename It>
+	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
+		const auto& diffuse = *(style ? style->diffuse.get_value_or(BLACK).components : BLACK.components);
+
+		json material = json::object();
+		material["name"] = "material-" + boost::lexical_cast<std::string>(materials.size());
+		material["diffuseColor"] = std::array<double, 3>{diffuse(0), diffuse(1), diffuse(2)};
+		material["specularColor"] = std::array<double, 3>{0., 0., 0.};
+		material["shininess"] = 0.;
+		material["isSmooth"] = false;
+		materials.push_back(material);
+
+		for (auto it = begin; it != end; ++it) {
+			auto points = points_from_facet(it);
+			std::vector<int> faces;
+			for (int i = 0; i < 3; ++i) {
+				faces.push_back(vertices.size());
+				vertices.push_back({{
+					CGAL::to_double(points[i].cartesian(0)),
+					CGAL::to_double(points[i].cartesian(1)),
+					CGAL::to_double(points[i].cartesian(2))
+				}});
+			}
+			boundaries.front().push_back({ faces });
+			boundary_materials.front().push_back(materials.size() - 1);
+		}
+	}
+
+	void finalize() {
+		json city;
+
+		city["type"] = "CityJSON";
+		city["version"] = "1.0";
+		city["extensions"] = json::object();
+		city["metadata"]["referenceSystem"] = "urn:ogc:def:crs:EPSG::2355";
+		city["vertices"] = vertices;
+		city["appearance"]["materials"] = materials;
+
+		auto& building1 = city["CityObjects"]["id-1"];
+		building1["type"] = "Building";
+		building1["geographicalExtent"] = std::array<double, 6>{0, 0, 0, 1, 1, 1};
+		/*
+		building1["attributes"]["measuredHeight"] = 22.3;
+		building1["attributes"]["roofType"] = "gable";
+		building1["attributes"]["owner"] = "Elvis Presley";
+		*/
+
+		json geom = json::object();
+		geom["type"] = "Solid";
+		geom["lod"] = 2;
+		geom["boundaries"] = boundaries;
+		geom["material"]["diffuse"]["values"] = boundary_materials;
+		building1["geometry"].push_back(geom);
+
+		std::ofstream(filename.c_str()) << city;
+	}
+
+	~city_json_writer() {
+		finalize();
 	}
 };
 
@@ -284,7 +374,7 @@ struct global_execution_context : public execution_context {
 		// do not have an equality operator on it.
 		decltype(styles)::iterator sit = styles.begin();
 		if (item.style && item.style->diffuse) {
-			auto cc = item.style->diffuse->components;
+			const auto& cc = *item.style->diffuse->components;
 			auto c = std::make_pair(cc(0), std::make_pair(cc(1), cc(2)));
 			auto it = diffuse_to_style.find(c);
 			if (it == diffuse_to_style.end()) {
@@ -743,7 +833,7 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 			break;
 		}
 
-		const auto& n = geom_object->transformation().data().components;
+		const auto& n = *geom_object->transformation().data().components;
 		const cgal_placement_t trsf2(
 			n(0, 0), n(0, 1), n(0, 2), n(0, 3),
 			n(1, 0), n(1, 1), n(1, 2), n(1, 3),
@@ -768,12 +858,10 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 			typedef ifcopenshell::geometry::taxonomy::point3 p;
 			auto edge = (e*)((l*)((cl*)((cl*)item)->children[0])->children[0])->children[0];
 			if (edge->basis == nullptr && edge->start.which() == 0 && edge->end.which() == 0) {
-				auto p0 = boost::get<p>(edge->start);
-				auto p1 = boost::get<p>(edge->end);
-				Eigen::Vector4d P0;
-				P0 << p0.components, 1.;
-				Eigen::Vector4d P1;
-				P1 << p1.components, 1.;
+				const auto& p0 = boost::get<p>(edge->start);
+				const auto& p1 = boost::get<p>(edge->end);
+				Eigen::Vector4d P0 = p0.components->homogeneous();
+				Eigen::Vector4d P1 = p1.components->homogeneous();
 				auto V0 = n * P0;
 				auto V1 = n * P1;
 				std::cout << "Axis " << V0(0) << " " << V0(1) << " " << V0(2) << " -> "
@@ -785,7 +873,7 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 
 		for (auto& g : geom_object->geometry()) {
 			auto s = ((ifcopenshell::geometry::CgalShape*) g.Shape())->shape();
-			const auto& m = g.Placement().components;
+			const auto& m = *g.Placement().components;
 			
 			const cgal_placement_t trsf(
 				m(0, 0), m(0, 1), m(0, 2), m(0, 3),
@@ -944,6 +1032,11 @@ int main(int argc, char** argv) {
 				style_facet_pairs = global_context.segment(c.polyhedron_exterior);
 			}
 			T0.stop();
+
+			city_json_writer write_city(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
+			for (auto& p : style_facet_pairs) {
+				write_city(p.first, p.second.begin(), p.second.end());
+			}
 
 			simple_obj_writer write_obj(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
 			for (auto& p : style_facet_pairs) {

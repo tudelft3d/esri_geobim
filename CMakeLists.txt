@@ -107,6 +107,8 @@ if(UNIX)
     set(BOOST_ROOT       ${IFCOPENSHELL_INSTALL}/boost-1.69.0)
     
     set(EIGEN_DIR        ${IFCOPENSHELL_INSTALL}/Eigen-3.3.7)
+
+	set(JSON_DIR         ${IFCOPENSHELL_INSTALL}/json)
     
     set(CGAL_INCLUDE_DIR ${IFCOPENSHELL_INSTALL}/cgal-4.13/include)
     set(CGAL_LIBRARY_DIR ${IFCOPENSHELL_INSTALL}/cgal-4.13/lib)
@@ -132,6 +134,8 @@ else()
     set(BOOST_LIBRARYDIR ${IFCOPENSHELL_ROOT}/deps/boost_1_67_0/stage/vs${MSVC_YEAR}-Win32/lib)
     
     set(EIGEN_DIR        ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/Eigen)
+
+	set(JSON_DIR         ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/json)
     
     set(CGAL_INCLUDE_DIR ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/cgal/include)
     set(CGAL_LIBRARY_DIR ${IFCOPENSHELL_ROOT}/deps-vs${MSVC_YEAR}-x86-installed/cgal/lib)
@@ -160,7 +164,7 @@ message(STATUS "Boost include files found in ${Boost_INCLUDE_DIRS}")
 message(STATUS "Boost libraries found in ${Boost_LIBRARY_DIRS}")
 
 include_directories(${OCC_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${IFC_INCLUDE_DIR}
-${EIGEN_DIR} ${CGAL_INCLUDE_DIR} ${GMP_INCLUDE_DIR} ${MPFR_INCLUDE_DIR})
+${EIGEN_DIR} ${CGAL_INCLUDE_DIR} ${GMP_INCLUDE_DIR} ${MPFR_INCLUDE_DIR} ${JSON_DIR})
 link_directories(${Boost_LIBRARY_DIRS})
 
 add_executable(tudelft_esri_geobim geobim.cpp)
