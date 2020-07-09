@@ -100,6 +100,33 @@ typename std::enable_if<!std::is_same<Poly_A, Poly_B>::value>::type poly_copy(Po
 	poly_b.delegate(modifier);
 }
 
+template <class Kb, class Ka>
+typename std::enable_if<std::is_same<Ka, Kb>::value>::type transformation_copy(CGAL::Aff_transformation_3<Kb>& trsf_b, const CGAL::Aff_transformation_3<Ka>& trsf_a) {
+	trsf_b = trsf_a;
+}
+
+template <class Kb, class Ka>
+typename std::enable_if<!std::is_same<Ka, Kb>::value>::type transformation_copy(CGAL::Aff_transformation_3<Kb>& trsf_b, const CGAL::Aff_transformation_3<Ka>& trsf_a) {
+	CGAL::NT_converter<
+		typename Ka::RT, 
+		typename Kb::RT> converter;
+	trsf_b = CGAL::Aff_transformation_3<Kb>(
+		converter(trsf_a.hm(0, 0)),
+		converter(trsf_a.hm(0, 1)),
+		converter(trsf_a.hm(0, 2)),
+		converter(trsf_a.hm(0, 3)),
+		converter(trsf_a.hm(1, 0)),
+		converter(trsf_a.hm(1, 1)),
+		converter(trsf_a.hm(1, 2)),
+		converter(trsf_a.hm(1, 3)),
+		converter(trsf_a.hm(2, 0)),
+		converter(trsf_a.hm(2, 1)),
+		converter(trsf_a.hm(2, 2)),
+		converter(trsf_a.hm(2, 3)),
+		converter(trsf_a.hm(3, 3))
+	);
+}
+
 
 namespace po = boost::program_options;
 
@@ -149,6 +176,14 @@ static timer_class timer;
 
 struct abstract_writer {
 	std::array<Kernel_::Point_3, 3> points_from_facet(cgal_shape_t::Facet_handle f) {
+		return {
+				f->facet_begin()->vertex()->point(),
+				f->facet_begin()->next()->vertex()->point(),
+				f->facet_begin()->next()->next()->vertex()->point()
+		};
+	}
+
+	std::array<CGAL::Simple_cartesian<double>::Point_3, 3> points_from_facet(CGAL::Polyhedron_3<CGAL::Simple_cartesian<double>>::Facet_handle f) {
 		return {
 				f->facet_begin()->vertex()->point(),
 				f->facet_begin()->next()->vertex()->point(),
@@ -296,7 +331,7 @@ struct geobim_settings {
 	std::vector<double> radii;
 	bool apply_openings, apply_openings_posthoc, debug, exact_segmentation;
 	ifcopenshell::geometry::settings settings;
-	std::set<std::string> entity_names;
+	boost::optional<std::set<std::string>> entity_names;
 	IfcParse::IfcFile* file;
 };
 
@@ -304,11 +339,29 @@ struct geobim_settings {
 struct shape_callback_item {
 	IfcUtil::IfcBaseEntity* src;
 	std::string id, type;
+	cgal_placement_t transformation;
 	cgal_shape_t polyhedron;
-	CGAL::Nef_polyhedron_3<Kernel_> nef_polyhedron;
 	boost::optional<ifcopenshell::geometry::taxonomy::style> style;
 	boost::optional<Eigen::Vector3d> wall_direction;
 	std::list<shape_callback_item*> openings;
+
+	bool to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef) {
+		auto T1 = timer.measure("ifc_element_to_nef");
+		nef = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron);
+		T1.stop();
+
+		if (nef.is_empty() || !nef.is_simple()) {
+			nef.clear();
+			return false;
+		}
+
+		return true;
+	}
+
+	bool polyhedron_world(cgal_shape_t& poly) {
+		poly = polyhedron;
+		std::transform(poly.points_begin(), poly.points_end(), poly.points_begin(), transformation);
+	}
 };
 
 // Prototype of a context to which processed shapes will be fed
@@ -362,7 +415,15 @@ struct global_execution_context : public execution_context {
 	std::list<TreeShapeType> triangulated_shape_memory;
 	std::map<typename TreeShapeType::Facet_handle, decltype(styles)::const_iterator> facet_to_style;
 
-	global_execution_context() {
+#ifdef GEOBIM_DEBUG
+	simple_obj_writer obj_;
+#endif
+
+	global_execution_context()
+#ifdef GEOBIM_DEBUG
+		: obj_("debug-tree")
+#endif
+	{
 		// style 0 is for elements without style annotations
 		styles.emplace_back();
 	}
@@ -385,13 +446,32 @@ struct global_execution_context : public execution_context {
 				sit = it->second;
 			}
 		}
+		/*
+		auto p = item.polyhedron;
+		// Apply transformation
+		for (auto &vertex : vertices(p)) {
+			vertex->point() = vertex->point().transform(item.transformation);
+		}
+		*/
 
 		TreeShapeType tree_polyhedron;
 		poly_copy(tree_polyhedron, item.polyhedron);
 
+		TreeKernel::Aff_transformation_3 transformation;
+		transformation_copy(transformation, item.transformation);
+
+		std::transform(
+			tree_polyhedron.points_begin(), tree_polyhedron.points_end(), 
+			tree_polyhedron.points_begin(), transformation);
+
 		triangulated_shape_memory.push_back(tree_polyhedron);
 		CGAL::Polygon_mesh_processing::triangulate_faces(triangulated_shape_memory.back());
 		tree.insert(faces(triangulated_shape_memory.back()).first, faces(triangulated_shape_memory.back()).second, triangulated_shape_memory.back());
+
+#ifdef GEOBIM_DEBUG
+		obj_(nullptr, triangulated_shape_memory.back().facets_begin(), triangulated_shape_memory.back().facets_end());
+#endif
+
 		for (auto& f : faces(triangulated_shape_memory.back())) {
 			TreeShapeType::Facet_handle F = f;
 			facet_to_style.insert({ F, sit });
@@ -472,8 +552,16 @@ struct radius_execution_context : public execution_context {
 	void operator()(shape_callback_item& item) {
 		CGAL::Nef_polyhedron_3<Kernel_> result;
 
+		CGAL::Nef_polyhedron_3<Kernel_> item_nef;
+		if (!item.to_nef_polyhedron(item_nef)) {
+			std::cerr << "no nef for product" << std::endl;
+			return;
+		}
+
+		item_nef.transform(item.transformation);
+
 		auto T0 = timer.measure("minkowski_sum");
-		result = CGAL::minkowski_sum_3(item.nef_polyhedron, padding_cube);
+		result = CGAL::minkowski_sum_3(item_nef, padding_cube);
 		T0.stop();
 
 		auto T1 = timer.measure("opening_handling");
@@ -507,8 +595,16 @@ struct radius_execution_context : public execution_context {
 
 			CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > opening_union;
 			for (auto& op : item.openings) {
-				auto bounds = create_bounding_box(op->polyhedron);
-				auto temp = bounds - op->nef_polyhedron;
+				auto bounds = create_bounding_box(op->polyhedron);				
+				CGAL::Nef_polyhedron_3<Kernel_> opening_nef;
+				if (!op->to_nef_polyhedron(opening_nef)) {
+					std::cerr << "no nef for opening" << std::endl;
+					continue;
+				}
+				opening_nef.transform(op->transformation);
+				bounds.transform(op->transformation);
+
+				auto temp = bounds - opening_nef;
 				temp = CGAL::minkowski_sum_3(ZX, temp);
 				temp = bounds - temp;
 				temp = CGAL::minkowski_sum_3(temp, Y);
@@ -770,13 +866,13 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 	settings.settings.set(ifcopenshell::geometry::settings::DISABLE_TRIANGULATION, true);
 	settings.settings.set(ifcopenshell::geometry::settings::DISABLE_OPENING_SUBTRACTIONS, !settings.apply_openings);
 
-	settings.entity_names = { "IfcWall", "IfcSlab" };
 	if (vmap.count("entities")) {
 		std::vector<std::string> tokens;
 		boost::split(tokens, vmap["entities"].as<std::string>(), boost::is_any_of(";"));
 		if (!tokens.empty()) {
-			settings.entity_names.clear();
-			settings.entity_names.insert(tokens.begin(), tokens.end());
+			settings.entity_names.emplace();
+			settings.entity_names->clear();
+			settings.entity_names->insert(tokens.begin(), tokens.end());
 		}
 	}
 
@@ -794,15 +890,17 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 	// Capture all openings beforehand, they are later assigned to the
 	// building elements.
 	auto opening_settings = settings;
-	opening_settings.entity_names = { "IfcOpeningElement" };
+	opening_settings.entity_names.emplace();
+	opening_settings.entity_names->insert("IfcOpeningElement");
 	if (settings.apply_openings_posthoc && settings.entity_names != opening_settings.entity_names) {
 		process_geometries(opening_settings, all_openings);
 	}
 
-	std::vector<ifcopenshell::geometry::filter_t> filters = {
-		IfcGeom::entity_filter(true, false, settings.entity_names)
-	};
-
+	std::vector<ifcopenshell::geometry::filter_t> filters;
+	if (settings.entity_names) {
+		filters.push_back(IfcGeom::entity_filter(true, false, *settings.entity_names));
+	}
+	
 	ifcopenshell::geometry::Iterator context_iterator("cgal", settings.settings, settings.file, filters);
 
 	auto T = timer.measure("ifc_geometry_processing");
@@ -834,7 +932,7 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 		}
 
 		const auto& n = *geom_object->transformation().data().components;
-		const cgal_placement_t trsf2(
+		const cgal_placement_t element_transformation (
 			n(0, 0), n(0, 1), n(0, 2), n(0, 3),
 			n(1, 0), n(1, 1), n(1, 2), n(1, 3),
 			n(2, 0), n(2, 1), n(2, 2), n(2, 3));
@@ -875,14 +973,14 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 			auto s = ((ifcopenshell::geometry::CgalShape*) g.Shape())->shape();
 			const auto& m = *g.Placement().components;
 			
-			const cgal_placement_t trsf(
+			const cgal_placement_t part_transformation (
 				m(0, 0), m(0, 1), m(0, 2), m(0, 3),
 				m(1, 0), m(1, 1), m(1, 2), m(1, 3),
 				m(2, 0), m(2, 1), m(2, 2), m(2, 3));
 
 			// Apply transformation
 			for (auto &vertex : vertices(s)) {
-				vertex->point() = vertex->point().transform(trsf).transform(trsf2);
+				vertex->point() = vertex->point().transform(part_transformation);
 			}
 
 			boost::optional<ifcopenshell::geometry::taxonomy::style> opt_style;
@@ -890,20 +988,12 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 				opt_style = g.Style();
 			}
 
-			auto T1 = timer.measure("ifc_element_to_nef");
-			CGAL::Nef_polyhedron_3<Kernel_> part_nef = ifcopenshell::geometry::utils::create_nef_polyhedron(s);
-			T1.stop();
-
-			if (part_nef.is_empty() || !part_nef.is_simple()) {
-				continue;
-			}
-
 			fn(shape_callback_item{
 				geom_object->product(),
 				geom_object->guid(),
 				geom_object->type(),
+				element_transformation,
 				s,
-				part_nef,
 				opt_style,
 				wall_direction,
 				openings });
