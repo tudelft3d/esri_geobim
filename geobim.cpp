@@ -583,15 +583,55 @@ struct radius_execution_context : public execution_context {
 			boost::graph_traits<cgal_shape_t>::face_descriptor>> self_intersections;
 		CGAL::Polygon_mesh_processing::self_intersections(item.polyhedron, std::back_inserter(self_intersections));
 
-		if (!self_intersections.empty()) {
-			std::cerr << self_intersections.size() << " self-intersections for product, skipping" << std::endl;
-			return;
-		}
-
 		previous_src = item.src;
 		previous_geom_ref = item.geom_reference;
 		last_place = item.transformation;
+		
+		if (!self_intersections.empty()) {
+			auto T2 = timer.measure("self_intersection_handling");
 
+			std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
+
+			CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
+
+			auto poly_triangulated = item.polyhedron;
+			CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated);
+
+			for (auto &face : faces(poly_triangulated)) {
+
+				if (!face->is_triangle()) {
+					std::cout << "Warning: non-triangular face!" << std::endl;
+					continue;
+				}
+				CGAL::Polyhedron_3<Kernel_>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
+				cgal_point_t points[3];
+				int i = 0;
+				do {
+					points[i] = current_halfedge->vertex()->point();
+					++i;
+					++current_halfedge;
+				} while (current_halfedge != face->facet_begin());
+
+				cgal_shape_t T;
+				T.make_triangle(points[0], points[1], points[2]);
+
+				CGAL::Nef_polyhedron_3<Kernel_> Tnef(T);
+
+				CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_cube);
+				accum.add_polyhedron(padded);
+
+			}
+
+			auto result = accum.get_union();
+			result.transform(item.transformation);
+
+			union_collector.add_polyhedron(result);
+			per_product_collector.add_polyhedron(result);
+
+			T2.stop();
+		}
+
+		
 		CGAL::Nef_polyhedron_3<Kernel_> result;
 
 		CGAL::Nef_polyhedron_3<Kernel_> item_nef;
@@ -739,8 +779,20 @@ struct radius_execution_context : public execution_context {
 
 		auto T2 = timer.measure("result_nef_processing");
 		polyhedron = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
+
+		{
+			simple_obj_writer tmp_debug("debug-after-boolean");
+			tmp_debug(nullptr, polyhedron.facets_begin(), polyhedron.facets_end());
+		}
+
 		// @todo Wasteful: remove interior on Nef?
 		polyhedron_exterior = extract(polyhedron, EXTERIOR);
+
+		{
+			simple_obj_writer tmp_debug("debug-exterior");
+			tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
+		}
+
 		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
 		bounding_box = create_bounding_box(polyhedron);
 
@@ -1049,6 +1101,7 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 				openings });
 
 			std::cout << "Processed: " << geom_object->geometry().id() << " " << geom_object->product()->data().toString() << std::endl;
+			std::cout << "Progress: " << context_iterator.progress() << std::endl;
 		}
 	}
 
@@ -1156,6 +1209,9 @@ int main(int argc, char** argv) {
 		}
 
 		process_geometries(settings, callback);
+
+		std::cout << "done processing geometries" << std::endl;
+		delete settings.file;
 
 		auto T1 = timer.measure("semantic_segmentation");
 		if (settings.exact_segmentation) {
