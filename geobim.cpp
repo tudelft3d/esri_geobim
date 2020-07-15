@@ -54,8 +54,8 @@ template <class Polyhedron_input,
 		typedef typename Polyhedron_input::Halfedge_around_facet_const_circulator HFCC;
 
 		CGAL::Cartesian_converter<
-			Polyhedron_input::Traits::Kernel,
-			Polyhedron_output::Traits::Kernel> converter;
+			typename Polyhedron_input::Traits::Kernel,
+			typename Polyhedron_output::Traits::Kernel> converter;
 
 		builder.begin_surface(in_poly.size_of_vertices(),
 			in_poly.size_of_facets(),
@@ -433,7 +433,7 @@ struct global_execution_context : public execution_context {
 
 		// Group taxonomy::styles based on diffuse colour since we
 		// do not have an equality operator on it.
-		decltype(styles)::iterator sit = styles.begin();
+		typename decltype(styles)::iterator sit = styles.begin();
 		if (item.style && item.style->diffuse) {
 			const auto& cc = *item.style->diffuse->components;
 			auto c = std::make_pair(cc(0), std::make_pair(cc(1), cc(2)));
@@ -457,7 +457,7 @@ struct global_execution_context : public execution_context {
 		TreeShapeType tree_polyhedron;
 		poly_copy(tree_polyhedron, item.polyhedron);
 
-		TreeKernel::Aff_transformation_3 transformation;
+		typename TreeKernel::Aff_transformation_3 transformation;
 		transformation_copy(transformation, item.transformation);
 
 		std::transform(
@@ -473,7 +473,7 @@ struct global_execution_context : public execution_context {
 #endif
 
 		for (auto& f : faces(triangulated_shape_memory.back())) {
-			TreeShapeType::Facet_handle F = f;
+			typename TreeShapeType::Facet_handle F = f;
 			facet_to_style.insert({ F, sit });
 		}
 	}
@@ -988,7 +988,7 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 				opt_style = g.Style();
 			}
 
-			fn(shape_callback_item{
+			shape_callback_item item {
 				geom_object->product(),
 				geom_object->guid(),
 				geom_object->type(),
@@ -996,7 +996,10 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 				s,
 				opt_style,
 				wall_direction,
-				openings });
+				openings
+			};
+				
+			fn(item);
 
 			std::cout << "Processed: " << geom_object->product()->data().toString() << std::endl;
 		}

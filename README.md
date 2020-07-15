@@ -29,7 +29,10 @@ about an hour on average hardware, five minutes on 32 core machine).
     cd esri_geobim/IfcOpenShell/nix
     apt-get install git gcc g++ autoconf bison make \
         libfreetype6-dev mesa-common-dev libffi-dev cmake
+    #   either:
     python build-all.py IfcConvert
+    #   or 
+    CC=/usr/bin/clang-10 CXX=/usr/bin/clang++-10 python2 build-all.py IfcConvert
     cd ../../
     mkdir build
     cd build
