@@ -338,7 +338,7 @@ struct geobim_settings {
 // Generated for every representation *item* in the IFC file
 struct shape_callback_item {
 	IfcUtil::IfcBaseEntity* src;
-	std::string id, type;
+	std::string id, type, geom_reference;
 	cgal_placement_t transformation;
 	cgal_shape_t polyhedron;
 	boost::optional<ifcopenshell::geometry::taxonomy::style> style;
@@ -369,6 +369,8 @@ struct execution_context {
 	virtual void operator()(shape_callback_item&) = 0;
 };
 
+#include <CGAL/Polygon_mesh_processing/self_intersections.h>
+
 struct opening_collector : public execution_context {
 	std::list<shape_callback_item> list;
 	std::map<IfcUtil::IfcBaseEntity*, IfcUtil::IfcBaseEntity*> opening_to_elem;
@@ -376,6 +378,9 @@ struct opening_collector : public execution_context {
 
 	opening_collector(IfcParse::IfcFile* f) {
 		auto rels = f->instances_by_type("IfcRelVoidsElement");
+		if (!rels) {
+			return;
+		}
 		for (auto& rel : *rels) {
 			auto be = (IfcUtil::IfcBaseEntity*) ((IfcUtil::IfcBaseEntity*)rel)->get_value<IfcUtil::IfcBaseClass*>("RelatingBuildingElement");
 			auto op = (IfcUtil::IfcBaseEntity*) ((IfcUtil::IfcBaseEntity*)rel)->get_value<IfcUtil::IfcBaseClass*>("RelatedOpeningElement");
@@ -392,7 +397,12 @@ struct opening_collector : public execution_context {
 	}
 };
 
-
+struct debug_writer : public execution_context {
+	void operator()(shape_callback_item& item) {
+		simple_obj_writer obj("debug-" + boost::lexical_cast<std::string>(item.src->data().id()));
+		obj(nullptr, item.polyhedron.facets_begin(), item.polyhedron.facets_end());
+	}
+};
 
 // State that is relevant accross the different radii for which the
 // program is executed. Mostly related for the mapping back to
@@ -549,7 +559,79 @@ struct radius_execution_context : public execution_context {
 		padding_cube_2 = padding_cube;
 	}
 
+	IfcUtil::IfcBaseEntity* previous_src = nullptr;
+	std::string previous_geom_ref;
+	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > per_product_collector;
+	cgal_placement_t last_place;
+
 	void operator()(shape_callback_item& item) {
+		if (item.src != previous_src) {
+			if (item.geom_reference == previous_geom_ref) {
+				std::cout << "Reusing padded geometry for " << item.src->data().toString() << std::endl;
+				auto product = per_product_collector.get_union();
+				product.transform(last_place.inverse());
+				product.transform(item.transformation);
+				union_collector.add_polyhedron(product);
+				return;
+			}
+			per_product_collector = CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> >();
+		}
+
+		std::vector<
+			std::pair<
+			boost::graph_traits<cgal_shape_t>::face_descriptor, 
+			boost::graph_traits<cgal_shape_t>::face_descriptor>> self_intersections;
+		CGAL::Polygon_mesh_processing::self_intersections(item.polyhedron, std::back_inserter(self_intersections));
+
+		previous_src = item.src;
+		previous_geom_ref = item.geom_reference;
+		last_place = item.transformation;
+		
+		if (!self_intersections.empty()) {
+			auto T2 = timer.measure("self_intersection_handling");
+
+			std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
+
+			CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
+
+			auto poly_triangulated = item.polyhedron;
+			CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated);
+
+			for (auto &face : faces(poly_triangulated)) {
+
+				if (!face->is_triangle()) {
+					std::cout << "Warning: non-triangular face!" << std::endl;
+					continue;
+				}
+				CGAL::Polyhedron_3<Kernel_>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
+				cgal_point_t points[3];
+				int i = 0;
+				do {
+					points[i] = current_halfedge->vertex()->point();
+					++i;
+					++current_halfedge;
+				} while (current_halfedge != face->facet_begin());
+
+				cgal_shape_t T;
+				T.make_triangle(points[0], points[1], points[2]);
+
+				CGAL::Nef_polyhedron_3<Kernel_> Tnef(T);
+
+				CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_cube);
+				accum.add_polyhedron(padded);
+
+			}
+
+			auto result = accum.get_union();
+			result.transform(item.transformation);
+
+			union_collector.add_polyhedron(result);
+			per_product_collector.add_polyhedron(result);
+
+			T2.stop();
+		}
+
+		
 		CGAL::Nef_polyhedron_3<Kernel_> result;
 
 		CGAL::Nef_polyhedron_3<Kernel_> item_nef;
@@ -623,10 +705,15 @@ struct radius_execution_context : public execution_context {
 		}
 		T1.stop();
 		union_collector.add_polyhedron(result);
+		per_product_collector.add_polyhedron(result);
 	}
 
 	// Extract the exterior component of a CGAL Polyhedron
 	cgal_shape_t extract(const cgal_shape_t& input, extract_component component) const {
+		if (input.facets_begin() == input.facets_end()) {
+			throw std::runtime_error("Empty input operand to extract()");
+		}
+
 		// Input is going to be mutated, so make a copy first
 		cgal_shape_t input_copy = input;
 
@@ -692,8 +779,20 @@ struct radius_execution_context : public execution_context {
 
 		auto T2 = timer.measure("result_nef_processing");
 		polyhedron = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
+
+		{
+			simple_obj_writer tmp_debug("debug-after-boolean");
+			tmp_debug(nullptr, polyhedron.facets_begin(), polyhedron.facets_end());
+		}
+
 		// @todo Wasteful: remove interior on Nef?
 		polyhedron_exterior = extract(polyhedron, EXTERIOR);
+
+		{
+			simple_obj_writer tmp_debug("debug-exterior");
+			tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
+		}
+
 		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
 		bounding_box = create_bounding_box(polyhedron);
 
@@ -950,23 +1049,25 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 		if (settings.apply_openings_posthoc && geom_object->product()->declaration().is("IfcWall")) {
 			auto T2 = timer.measure("wall_axis_handling");
 			auto item = geometry_mapper->map(geom_object->product());
-			typedef ifcopenshell::geometry::taxonomy::collection cl;
-			typedef ifcopenshell::geometry::taxonomy::loop l;
-			typedef ifcopenshell::geometry::taxonomy::edge e;
-			typedef ifcopenshell::geometry::taxonomy::point3 p;
-			auto edge = (e*)((l*)((cl*)((cl*)item)->children[0])->children[0])->children[0];
-			if (edge->basis == nullptr && edge->start.which() == 0 && edge->end.which() == 0) {
-				const auto& p0 = boost::get<p>(edge->start);
-				const auto& p1 = boost::get<p>(edge->end);
-				Eigen::Vector4d P0 = p0.components->homogeneous();
-				Eigen::Vector4d P1 = p1.components->homogeneous();
-				auto V0 = n * P0;
-				auto V1 = n * P1;
-				std::cout << "Axis " << V0(0) << " " << V0(1) << " " << V0(2) << " -> "
-					<< V1(0) << " " << V1(1) << " " << V1(2) << std::endl;
-				wall_direction = (V1 - V0).head<3>().normalized();
+			if (item) {
+				typedef ifcopenshell::geometry::taxonomy::collection cl;
+				typedef ifcopenshell::geometry::taxonomy::loop l;
+				typedef ifcopenshell::geometry::taxonomy::edge e;
+				typedef ifcopenshell::geometry::taxonomy::point3 p;
+				auto edge = (e*)((l*)((cl*)((cl*)item)->children[0])->children[0])->children[0];
+				if (edge->basis == nullptr && edge->start.which() == 0 && edge->end.which() == 0) {
+					const auto& p0 = boost::get<p>(edge->start);
+					const auto& p1 = boost::get<p>(edge->end);
+					Eigen::Vector4d P0 = p0.components->homogeneous();
+					Eigen::Vector4d P1 = p1.components->homogeneous();
+					auto V0 = n * P0;
+					auto V1 = n * P1;
+					std::cout << "Axis " << V0(0) << " " << V0(1) << " " << V0(2) << " -> "
+						<< V1(0) << " " << V1(1) << " " << V1(2) << std::endl;
+					wall_direction = (V1 - V0).head<3>().normalized();
+				}
+				T2.stop();
 			}
-			T2.stop();
 		}
 
 		for (auto& g : geom_object->geometry()) {
@@ -992,6 +1093,7 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 				geom_object->product(),
 				geom_object->guid(),
 				geom_object->type(),
+				geom_object->geometry().id(),
 				element_transformation,
 				s,
 				opt_style,
@@ -1001,7 +1103,8 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 				
 			fn(item);
 
-			std::cout << "Processed: " << geom_object->product()->data().toString() << std::endl;
+			std::cout << "Processed: " << geom_object->geometry().id() << " " << geom_object->product()->data().toString() << std::endl;
+			std::cout << "Progress: " << context_iterator.progress() << std::endl;
 		}
 	}
 
@@ -1085,6 +1188,10 @@ int main(int argc, char** argv) {
 		callback.contexts.push_back(&global_context);
 	}
 
+#ifdef GEOBIM_DEBUG
+	callback.contexts.push_back(new debug_writer);
+#endif
+
 	if (settings.radii.empty()) {
 		auto cec = new capturing_execution_context;
 		callback.contexts.push_back(cec);
@@ -1105,6 +1212,9 @@ int main(int argc, char** argv) {
 		}
 
 		process_geometries(settings, callback);
+
+		std::cout << "done processing geometries" << std::endl;
+		delete settings.file;
 
 		auto T1 = timer.measure("semantic_segmentation");
 		if (settings.exact_segmentation) {
