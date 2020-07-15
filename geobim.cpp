@@ -576,12 +576,15 @@ struct radius_execution_context : public execution_context {
 			}
 			per_product_collector = CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> >();
 		}
-
+		
+		auto poly_triangulated = item.polyhedron;
+		CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated);
+			
 		std::vector<
 			std::pair<
 			boost::graph_traits<cgal_shape_t>::face_descriptor, 
 			boost::graph_traits<cgal_shape_t>::face_descriptor>> self_intersections;
-		CGAL::Polygon_mesh_processing::self_intersections(item.polyhedron, std::back_inserter(self_intersections));
+		CGAL::Polygon_mesh_processing::self_intersections(poly_triangulated, std::back_inserter(self_intersections));
 
 		previous_src = item.src;
 		previous_geom_ref = item.geom_reference;
@@ -593,9 +596,6 @@ struct radius_execution_context : public execution_context {
 			std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
 
 			CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
-
-			auto poly_triangulated = item.polyhedron;
-			CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated);
 
 			for (auto &face : faces(poly_triangulated)) {
 
