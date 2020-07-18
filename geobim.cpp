@@ -329,7 +329,7 @@ struct city_json_writer : public abstract_writer {
 struct geobim_settings {
 	std::string input_filename, output_filename;
 	std::vector<double> radii;
-	bool apply_openings, apply_openings_posthoc, debug, exact_segmentation;
+	bool apply_openings, apply_openings_posthoc, debug, exact_segmentation, minkowski_triangles;
 	ifcopenshell::geometry::settings settings;
 	boost::optional<std::set<std::string>> entity_names;
 	IfcParse::IfcFile* file;
@@ -361,6 +361,7 @@ struct shape_callback_item {
 	bool polyhedron_world(cgal_shape_t& poly) {
 		poly = polyhedron;
 		std::transform(poly.points_begin(), poly.points_end(), poly.points_begin(), transformation);
+		return true;
 	}
 };
 
@@ -417,13 +418,13 @@ struct global_execution_context : public execution_context {
 	AAbbTree tree;
 
 	std::list<ifcopenshell::geometry::taxonomy::style> styles;
-	std::map<std::pair<double, std::pair<double, double>>, decltype(styles)::iterator> diffuse_to_style;
+	std::map<std::pair<double, std::pair<double, double>>, typename decltype(styles)::iterator> diffuse_to_style;
 
 	// A reference is kept to the original shapes in a std::list.
 	// Later an aabb tree is used map eroded triangle centroids
 	// back to the original elements to preserve semantics.
 	std::list<TreeShapeType> triangulated_shape_memory;
-	std::map<typename TreeShapeType::Facet_handle, decltype(styles)::const_iterator> facet_to_style;
+	std::map<typename TreeShapeType::Facet_handle, typename decltype(styles)::const_iterator> facet_to_style;
 
 #ifdef GEOBIM_DEBUG
 	simple_obj_writer obj_;
@@ -540,8 +541,9 @@ struct radius_execution_context : public execution_context {
 	CGAL::Nef_polyhedron_3<Kernel_> padding_cube, padding_cube_2, boolean_result, exterior, bounding_box, complement, complement_padded;
 	cgal_shape_t polyhedron, polyhedron_exterior;
 	enum extract_component { INTERIOR, EXTERIOR };
+	bool minkowski_triangles_;
 
-	radius_execution_context(double r, bool narrower = false) : radius(r) {
+	radius_execution_context(double r, bool narrower = false, bool minkowski_triangles = false) : radius(r), minkowski_triangles_(minkowski_triangles) {
 		{
 			auto polycube = ifcopenshell::geometry::utils::create_cube(r);
 			padding_cube = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
@@ -578,7 +580,10 @@ struct radius_execution_context : public execution_context {
 		}
 		
 		auto poly_triangulated = item.polyhedron;
-		CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated);
+		if (!CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated)) {
+			std::cerr << "unable to triangulate all faces" << std::endl;
+			return;
+		}
 			
 		std::vector<
 			std::pair<
@@ -590,7 +595,13 @@ struct radius_execution_context : public execution_context {
 		previous_geom_ref = item.geom_reference;
 		last_place = item.transformation;
 		
-		if (!self_intersections.empty()) {
+		CGAL::Nef_polyhedron_3<Kernel_> item_nef, result;
+		bool item_nef_succeeded;
+		if (!(item_nef_succeeded = item.to_nef_polyhedron(item_nef))) {
+			std::cerr << "no nef for product" << std::endl;
+		}
+		
+		if (minkowski_triangles_ || !item_nef_succeeded || !self_intersections.empty()) {
 			auto T2 = timer.measure("self_intersection_handling");
 
 			std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
@@ -603,6 +614,7 @@ struct radius_execution_context : public execution_context {
 					std::cout << "Warning: non-triangular face!" << std::endl;
 					continue;
 				}
+				
 				CGAL::Polyhedron_3<Kernel_>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
 				cgal_point_t points[3];
 				int i = 0;
@@ -611,6 +623,14 @@ struct radius_execution_context : public execution_context {
 					++i;
 					++current_halfedge;
 				} while (current_halfedge != face->facet_begin());
+				
+				/*
+				double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<Kernel_>(points[0], points[1], points[2]).squared_area()));
+				if (A < 1.e-5) {
+					std::cout << "Skipping triangle with area " << A << std::endl;
+                                        continue;
+				}
+				*/
 
 				cgal_shape_t T;
 				T.make_triangle(points[0], points[1], points[2]);
@@ -622,29 +642,17 @@ struct radius_execution_context : public execution_context {
 
 			}
 
-			auto result = accum.get_union();
+			result = accum.get_union();
 			result.transform(item.transformation);
 
-			union_collector.add_polyhedron(result);
-			per_product_collector.add_polyhedron(result);
-
 			T2.stop();
+		} else {
+			item_nef.transform(item.transformation);
+
+			auto T0 = timer.measure("minkowski_sum");
+			result = CGAL::minkowski_sum_3(item_nef, padding_cube);
+			T0.stop();
 		}
-
-		
-		CGAL::Nef_polyhedron_3<Kernel_> result;
-
-		CGAL::Nef_polyhedron_3<Kernel_> item_nef;
-		if (!item.to_nef_polyhedron(item_nef)) {
-			std::cerr << "no nef for product" << std::endl;
-			return;
-		}
-
-		item_nef.transform(item.transformation);
-
-		auto T0 = timer.measure("minkowski_sum");
-		result = CGAL::minkowski_sum_3(item_nef, padding_cube);
-		T0.stop();
 
 		auto T1 = timer.measure("opening_handling");
 		if (item.wall_direction && item.openings.size()) {
@@ -704,6 +712,7 @@ struct radius_execution_context : public execution_context {
 			}
 		}
 		T1.stop();
+		
 		union_collector.add_polyhedron(result);
 		per_product_collector.add_polyhedron(result);
 	}
@@ -900,6 +909,7 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 		("timings,t", "print timings after execution")
 		("exact-segmentation,e", "use exact kernel in proximity tree for semantic association (not recommended)")
 		("openings-posthoc,O", "whether to process opening subtractions posthoc")
+		("minkowski-triangles,T", "force minkowski sum on individual triangles, slow..")
 		("entities,e", new po::typed_value<std::string, char>(&entities), "semicolon separated list of IFC entities to include")
 		("input-file", new po::typed_value<std::string, char>(&settings.input_filename), "input IFC file")
 		("output-file", new po::typed_value<std::string, char>(&settings.output_filename), "output OBJ file")
@@ -950,6 +960,7 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 	settings.apply_openings_posthoc = vmap.count("openings-posthoc");
 	settings.exact_segmentation = vmap.count("exact-segmentation");
 	settings.debug = vmap.count("debug");
+	settings.minkowski_triangles = vmap.count("minkowski-triangles");
 
 	settings.file = new IfcParse::IfcFile(settings.input_filename);
 
@@ -1030,6 +1041,8 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 			break;
 		}
 
+		std::cout << "Processing: " << geom_object->product()->data().toString() << std::endl;
+		
 		const auto& n = *geom_object->transformation().data().components;
 		const cgal_placement_t element_transformation (
 			n(0, 0), n(0, 1), n(0, 2), n(0, 3),
@@ -1103,9 +1116,11 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 				
 			fn(item);
 
-			std::cout << "Processed: " << geom_object->geometry().id() << " " << geom_object->product()->data().toString() << std::endl;
-			std::cout << "Progress: " << context_iterator.progress() << std::endl;
+			std::cout << "Processed: " << geom_object->product()->data().toString() << " part: #" << geom_object->geometry().id() << std::endl;
 		}
+		
+		std::cout << "Progress: " << context_iterator.progress() << std::endl;
+
 	}
 
 	return 0;
@@ -1203,7 +1218,7 @@ int main(int argc, char** argv) {
 		bool first = true;
 		for (double r : settings.radii) {
 			// 2nd is narrower (depending on ifdef above, appears to be necessary).
-			radius_contexts.emplace_back(r, !first);
+			radius_contexts.emplace_back(r, !first, settings.minkowski_triangles);
 			first = false;
 		}
 
