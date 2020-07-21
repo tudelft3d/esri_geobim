@@ -1150,7 +1150,7 @@ int main(int argc, char** argv) {
 	geobim_settings settings;
 	parse_command_line(settings, argc, argv);
 
-	global_execution_context<CGAL::Simple_cartesian<CGAL::Gmpq>> global_context;
+	global_execution_context<CGAL::Epick> global_context;
 	global_execution_context<Kernel_> global_context_exact;
 
 	shape_callback callback;
