@@ -992,6 +992,11 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 		if (!geom_object) {
 			break;
 		}
+		
+		if (geom_object->guid() == "3es57B9Kr3nxL4uBITV$0e") {
+			std::cout << "NOTICE Skipping: " << geom_object->product()->data().toString() << std::endl;
+			continue;
+		}
 
 		std::cout << "Processing: " << geom_object->product()->data().toString() << std::endl;
 		
