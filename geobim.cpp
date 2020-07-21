@@ -27,6 +27,8 @@
 #include <CGAL/AABB_traits.h>
 #include <CGAL/AABB_face_graph_triangle_primitive.h>
 
+#include <CGAL/boost/graph/copy_face_graph.h>
+
 #include <boost/program_options.hpp>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/classification.hpp>
@@ -34,59 +36,6 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
-
-// Can be used to convert polyhedron from exact to inexact and vice-versa
-template <class Polyhedron_input,
-	class Polyhedron_output>
-	struct Copy_polyhedron_to
-	: public CGAL::Modifier_base<typename Polyhedron_output::HalfedgeDS> {
-	Copy_polyhedron_to(const Polyhedron_input& in_poly)
-		: in_poly(in_poly) {}
-
-	void operator()(typename Polyhedron_output::HalfedgeDS& out_hds) {
-		typedef typename Polyhedron_output::HalfedgeDS Output_HDS;
-		typedef typename Polyhedron_input::HalfedgeDS Input_HDS;
-
-		CGAL::Polyhedron_incremental_builder_3<Output_HDS> builder(out_hds);
-
-		typedef typename Polyhedron_input::Vertex_const_iterator Vertex_const_iterator;
-		typedef typename Polyhedron_input::Facet_const_iterator  Facet_const_iterator;
-		typedef typename Polyhedron_input::Halfedge_around_facet_const_circulator HFCC;
-
-		CGAL::Cartesian_converter<
-			typename Polyhedron_input::Traits::Kernel,
-			typename Polyhedron_output::Traits::Kernel> converter;
-
-		builder.begin_surface(in_poly.size_of_vertices(),
-			in_poly.size_of_facets(),
-			in_poly.size_of_halfedges());
-
-		for (Vertex_const_iterator
-			vi = in_poly.vertices_begin(), end = in_poly.vertices_end();
-			vi != end; ++vi) {
-			builder.add_vertex(converter(vi->point()));
-		}
-
-		typedef CGAL::Inverse_index<Vertex_const_iterator> Index;
-		Index index(in_poly.vertices_begin(), in_poly.vertices_end());
-
-		for (Facet_const_iterator
-			fi = in_poly.facets_begin(), end = in_poly.facets_end();
-			fi != end; ++fi) {
-			HFCC hc = fi->facet_begin();
-			HFCC hc_end = hc;
-			builder.begin_facet();
-			do {
-				builder.add_vertex_to_facet(index[hc->vertex()]);
-				++hc;
-			} while (hc != hc_end);
-			builder.end_facet();
-		}
-		builder.end_surface();
-	} // end operator()(..)
-	private:
-		const Polyhedron_input& in_poly;
-}; // end Copy_polyhedron_to<>
 
 template <class Poly_B, class Poly_A>
 typename std::enable_if<std::is_same<Poly_A, Poly_B>::value>::type poly_copy(Poly_B& poly_b, const Poly_A& poly_a) {
@@ -96,8 +45,7 @@ typename std::enable_if<std::is_same<Poly_A, Poly_B>::value>::type poly_copy(Pol
 template <class Poly_B, class Poly_A>
 typename std::enable_if<!std::is_same<Poly_A, Poly_B>::value>::type poly_copy(Poly_B& poly_b, const Poly_A& poly_a) {
 	poly_b.clear();
-	Copy_polyhedron_to<Poly_A, Poly_B> modifier(poly_a);
-	poly_b.delegate(modifier);
+	CGAL::copy_face_graph(poly_a, poly_b);
 }
 
 template <class Kb, class Ka>
@@ -579,16 +527,17 @@ struct radius_execution_context : public execution_context {
 			per_product_collector = CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> >();
 		}
 		
-		auto poly_triangulated = item.polyhedron;
+		CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
+		poly_copy(poly_triangulated, item.polyhedron);
 		if (!CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated)) {
 			std::cerr << "unable to triangulate all faces" << std::endl;
 			return;
 		}
-			
+
 		std::vector<
 			std::pair<
-			boost::graph_traits<cgal_shape_t>::face_descriptor, 
-			boost::graph_traits<cgal_shape_t>::face_descriptor>> self_intersections;
+			boost::graph_traits<CGAL::Polyhedron_3<CGAL::Epick>>::face_descriptor,
+			boost::graph_traits<CGAL::Polyhedron_3<CGAL::Epick>>::face_descriptor>> self_intersections;
 		CGAL::Polygon_mesh_processing::self_intersections(poly_triangulated, std::back_inserter(self_intersections));
 
 		previous_src = item.src;
@@ -615,8 +564,9 @@ struct radius_execution_context : public execution_context {
 					continue;
 				}
 				
-				CGAL::Polyhedron_3<Kernel_>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
-				cgal_point_t points[3];
+				CGAL::Polyhedron_3<CGAL::Epick>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
+				CGAL::Point_3<CGAL::Epick> points[3];
+
 				int i = 0;
 				do {
 					points[i] = current_halfedge->vertex()->point();
@@ -633,13 +583,13 @@ struct radius_execution_context : public execution_context {
 				*/
 
 				cgal_shape_t T;
-				T.make_triangle(points[0], points[1], points[2]);
+				CGAL::Cartesian_converter<CGAL::Epick, CGAL::Epeck> C;
+				T.make_triangle(C(points[0]), C(points[1]), C(points[2]));
 
 				CGAL::Nef_polyhedron_3<Kernel_> Tnef(T);
 
 				CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_cube);
 				accum.add_polyhedron(padded);
-
 			}
 
 			result = accum.get_union();
@@ -1009,6 +959,8 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 	std::vector<ifcopenshell::geometry::filter_t> filters;
 	if (settings.entity_names) {
 		filters.push_back(IfcGeom::entity_filter(true, false, *settings.entity_names));
+	} else {
+		filters.push_back(IfcGeom::entity_filter(false, false, {"IfcSpace", "IfcOpeningElement"}));
 	}
 	
 	ifcopenshell::geometry::Iterator context_iterator("cgal", settings.settings, settings.file, filters);
@@ -1193,7 +1145,7 @@ int main(int argc, char** argv) {
 	geobim_settings settings;
 	parse_command_line(settings, argc, argv);
 
-	global_execution_context<CGAL::Simple_cartesian<double>> global_context;
+	global_execution_context<CGAL::Simple_cartesian<CGAL::Gmpq>> global_context;
 	global_execution_context<Kernel_> global_context_exact;
 
 	shape_callback callback;
