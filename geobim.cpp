@@ -482,6 +482,39 @@ struct capturing_execution_context : public execution_context {
 	}
 };
 
+template <class HDS> 
+class PolyFromMesh : public CGAL::Modifier_base<HDS> {
+private:
+
+	std::list<cgal_point_t> points_;
+	std::vector<std::vector<int>> indices_;
+
+public:
+	PolyFromMesh(const std::list<cgal_point_t>& points, const std::vector<std::vector<int>>& indices)
+		: points_(points)
+		, indices_(indices) {}
+
+	void operator()(HDS& hds) {
+		CGAL::Polyhedron_incremental_builder_3<HDS> B(hds, false);
+
+		B.begin_surface(points_.size(), indices_.size());
+
+		for (auto& p : points_) {
+			B.add_vertex(p);
+		}
+
+		for (auto& fs : indices_) {
+			B.begin_facet();
+			for (auto& i : fs) {
+				B.add_vertex_to_facet(i);
+			}
+			B.end_facet();
+		}
+
+		B.end_surface();
+	}
+};
+
 #include <CGAL/exceptions.h>
 
 // State (polyhedra mostly) that are relevant only for one radius
@@ -645,10 +678,21 @@ struct radius_execution_context : public execution_context {
 			Kernel_::Point_3 Z0(0, 0, -radius);
 			Kernel_::Point_3 Z1(0, 0, +radius);
 
-			CGAL::Nef_polyhedron_3<Kernel_> X(CGAL::Segment_3<Kernel_>(X0, X1));
+			// CGAL::Nef_polyhedron_3<Kernel_> X(CGAL::Segment_3<Kernel_>(X0, X1));
 			CGAL::Nef_polyhedron_3<Kernel_> Y(CGAL::Segment_3<Kernel_>(Y0, Y1));
-			CGAL::Nef_polyhedron_3<Kernel_> Z(CGAL::Segment_3<Kernel_>(Z0, Z1));
-			auto ZX = CGAL::minkowski_sum_3(X, Z);
+			// CGAL::Nef_polyhedron_3<Kernel_> Z(CGAL::Segment_3<Kernel_>(Z0, Z1));
+			// auto ZX = CGAL::minkowski_sum_3(X, Z);
+
+			// manual minkowski sum...
+			CGAL::Polyhedron_3<Kernel_> zx;
+			PolyFromMesh<cgal_shape_t::HDS> m({
+				CGAL::ORIGIN + ((X0 - CGAL::ORIGIN) + (Z0 - CGAL::ORIGIN)),
+				CGAL::ORIGIN + ((X1 - CGAL::ORIGIN) + (Z0 - CGAL::ORIGIN)),
+				CGAL::ORIGIN + ((X1 - CGAL::ORIGIN) + (Z1 - CGAL::ORIGIN)),
+				CGAL::ORIGIN + ((X0 - CGAL::ORIGIN) + (Z1 - CGAL::ORIGIN))
+			}, { {0,1,2,3} });
+			zx.delegate(m);
+			CGAL::Nef_polyhedron_3<Kernel_> ZX(zx);
 
 			CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > opening_union;
 			for (auto& op : item.openings) {
