@@ -482,6 +482,8 @@ struct capturing_execution_context : public execution_context {
 	}
 };
 
+#include <CGAL/exceptions.h>
+
 // State (polyhedra mostly) that are relevant only for one radius
 struct radius_execution_context : public execution_context {
 	double radius;
@@ -549,11 +551,28 @@ struct radius_execution_context : public execution_context {
 		if (!(item_nef_succeeded = item.to_nef_polyhedron(item_nef))) {
 			std::cerr << "no nef for product" << std::endl;
 		}
+
+		bool result_set = false;
 		
-		if (minkowski_triangles_ || !item_nef_succeeded || !self_intersections.empty()) {
+		if (!(minkowski_triangles_ || !item_nef_succeeded || !self_intersections.empty())) {
+			item_nef.transform(item.transformation);
+
+			auto T0 = timer.measure("minkowski_sum");
+			try {
+				result = CGAL::minkowski_sum_3(item_nef, padding_cube);
+				result_set = true;
+			} catch (CGAL::Failure_exception&) {
+				std::cerr << "Minkowski on volume failed, retrying with individual triangles" << std::endl;
+			}
+			T0.stop();
+		} 
+		
+		if (!result_set) {
 			auto T2 = timer.measure("self_intersection_handling");
 
-			std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
+			if (self_intersections.size()) {
+				std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
+			}
 
 			CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
 
@@ -563,7 +582,7 @@ struct radius_execution_context : public execution_context {
 					std::cout << "Warning: non-triangular face!" << std::endl;
 					continue;
 				}
-				
+
 				CGAL::Polyhedron_3<CGAL::Epick>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
 				CGAL::Point_3<CGAL::Epick> points[3];
 
@@ -573,12 +592,12 @@ struct radius_execution_context : public execution_context {
 					++i;
 					++current_halfedge;
 				} while (current_halfedge != face->facet_begin());
-				
+
 				/*
 				double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<Kernel_>(points[0], points[1], points[2]).squared_area()));
 				if (A < 1.e-5) {
 					std::cout << "Skipping triangle with area " << A << std::endl;
-                                        continue;
+										continue;
 				}
 				*/
 
@@ -596,12 +615,10 @@ struct radius_execution_context : public execution_context {
 			result.transform(item.transformation);
 
 			T2.stop();
-		} else {
-			item_nef.transform(item.transformation);
-
-			auto T0 = timer.measure("minkowski_sum");
-			result = CGAL::minkowski_sum_3(item_nef, padding_cube);
-			T0.stop();
+		}
+		
+		else {
+			
 		}
 
 		auto T1 = timer.measure("opening_handling");
