@@ -305,12 +305,6 @@ struct shape_callback_item {
 
 		return true;
 	}
-
-	bool polyhedron_world(cgal_shape_t& poly) {
-		poly = polyhedron;
-		std::transform(poly.points_begin(), poly.points_end(), poly.points_begin(), transformation);
-		return true;
-	}
 };
 
 // Prototype of a context to which processed shapes will be fed
@@ -685,12 +679,14 @@ struct radius_execution_context : public execution_context {
 
 			// manual minkowski sum...
 			CGAL::Polyhedron_3<Kernel_> zx;
-			PolyFromMesh<cgal_shape_t::HDS> m({
+			std::list<cgal_point_t> zx_points{ {
 				CGAL::ORIGIN + ((X0 - CGAL::ORIGIN) + (Z0 - CGAL::ORIGIN)),
 				CGAL::ORIGIN + ((X1 - CGAL::ORIGIN) + (Z0 - CGAL::ORIGIN)),
 				CGAL::ORIGIN + ((X1 - CGAL::ORIGIN) + (Z1 - CGAL::ORIGIN)),
 				CGAL::ORIGIN + ((X0 - CGAL::ORIGIN) + (Z1 - CGAL::ORIGIN))
-			}, { {0,1,2,3} });
+			} };
+			std::vector<std::vector<int>> zx_idxs{ {{{0,1,2,3}}} };
+			PolyFromMesh<cgal_shape_t::HDS> m(zx_points, zx_idxs);
 			zx.delegate(m);
 			CGAL::Nef_polyhedron_3<Kernel_> ZX(zx);
 
