@@ -149,19 +149,19 @@ struct simple_obj_writer : public abstract_writer {
 	int group_id = 1;
 	int vertex_count = 1;
 	std::ofstream obj, mtl;
-	ifcopenshell::geometry::taxonomy::colour BLACK;
+	ifcopenshell::geometry::taxonomy::colour GRAY;
 
 	simple_obj_writer(const std::string& fn_prefix)
 		: obj((fn_prefix + ".obj").c_str())
 		, mtl((fn_prefix + ".mtl").c_str())
-		, BLACK(0., 0., 0.) 
+		, GRAY(0.6, 0.6, 0.6)
 	{
 		obj << "mtllib " << fn_prefix << ".mtl\n";
 	}
 	
 	template <typename It>
 	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
-		const auto& diffuse = *(style ? style->diffuse.get_value_or(BLACK).components : BLACK.components);
+		const auto& diffuse = *(style ? style->diffuse.get_value_or(GRAY).components : GRAY.components);
 
 		obj << "g group-" << group_id << "\n";
 		obj << "usemtl m" << group_id << "\n";
@@ -188,7 +188,7 @@ struct simple_obj_writer : public abstract_writer {
 };
 
 struct city_json_writer : public abstract_writer {
-	ifcopenshell::geometry::taxonomy::colour BLACK;
+	ifcopenshell::geometry::taxonomy::colour GRAY;
 
 	using json = nlohmann::json;
 
@@ -203,7 +203,7 @@ struct city_json_writer : public abstract_writer {
 	city_json_writer(const std::string& fn_prefix)
 		: filename(fn_prefix + ".json")
 		, materials(json::array())
-		, BLACK(0., 0., 0.)
+		, GRAY(0.6, 0.6, 0.6)
 	{
 		// assumes one solid.
 		boundaries.emplace_back();
@@ -212,7 +212,7 @@ struct city_json_writer : public abstract_writer {
 
 	template <typename It>
 	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
-		const auto& diffuse = *(style ? style->diffuse.get_value_or(BLACK).components : BLACK.components);
+		const auto& diffuse = *(style ? style->diffuse.get_value_or(GRAY).components : GRAY.components);
 
 		json material = json::object();
 		material["name"] = "material-" + boost::lexical_cast<std::string>(materials.size());
