@@ -456,7 +456,8 @@ struct global_execution_context : public execution_context {
 				converter(f->facet_begin()->next()->next()->vertex()->point())
 			);
 			auto pair = tree.closest_point_and_primitive(O);
-			auto it = facet_to_style.find(pair.second);
+			typename TreeShapeType::Facet_handle F = pair.second;
+			auto it = facet_to_style.find(F);
 			if (it != facet_to_style.end()) {
 				int sid = std::distance(styles.cbegin(), it->second);
 				result[sid].second.push_back(f);
