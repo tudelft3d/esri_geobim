@@ -642,10 +642,6 @@ struct radius_execution_context : public execution_context {
 
 			T2.stop();
 		}
-		
-		else {
-			
-		}
 
 		auto T1 = timer.measure("opening_handling");
 		if (item.wall_direction && item.openings.size()) {
