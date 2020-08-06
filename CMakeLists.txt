@@ -158,6 +158,10 @@ else()
     string(REGEX REPLACE "([^;]+)" "${IFC_LIBRARY_DIR}/\\1.lib" IFC_LIBRARIES "${IFC_LIBRARY_NAMES}")
 endif()
 
+if (MSVC)
+	add_definitions(/bigobj)
+endif()
+
 find_package(Boost REQUIRED COMPONENTS ${BOOST_COMPONENTS})
 
 message(STATUS "Boost include files found in ${Boost_INCLUDE_DIRS}")
