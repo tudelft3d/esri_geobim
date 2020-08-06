@@ -621,13 +621,11 @@ struct radius_execution_context : public execution_context {
 					++current_halfedge;
 				} while (current_halfedge != face->facet_begin());
 
-				/*
-				double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<Kernel_>(points[0], points[1], points[2]).squared_area()));
+				double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<CGAL::Epick>(points[0], points[1], points[2]).squared_area()));
 				if (A < 1.e-5) {
 					std::cout << "Skipping triangle with area " << A << std::endl;
-										continue;
+					continue;
 				}
-				*/
 
 				cgal_shape_t T;
 				CGAL::Cartesian_converter<CGAL::Epick, CGAL::Epeck> C;
@@ -1205,6 +1203,9 @@ double binary_search(It first, It second, std::pair<double, double> range) {
 }
 
 int main(int argc, char** argv) {
+	Logger::SetOutput(&std::cerr, &std::cerr);
+	Logger::Verbosity(Logger::LOG_NOTICE);
+
 	geobim_settings settings;
 	parse_command_line(settings, argc, argv);
 
