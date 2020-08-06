@@ -511,6 +511,7 @@ public:
 };
 
 #include <CGAL/exceptions.h>
+#include <CGAL/boost/graph/convert_nef_polyhedron_to_polygon_mesh.h>
 
 // State (polyhedra mostly) that are relevant only for one radius
 struct radius_execution_context : public execution_context {
@@ -836,12 +837,17 @@ struct radius_execution_context : public execution_context {
 
 		exterior.extract_regularization();
 
-		auto T1 = timer.measure("result_nef_to_poly");
-		polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
-		T1.stop();
+		if (exterior.is_simple()) {
+			auto T1 = timer.measure("result_nef_to_poly");
+			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
+			T1.stop();
 
-		auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
-		std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
+			auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
+			std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
+		} else {
+			CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
+			std::cout << "Result with radius " << radius << " is not manifold" << std::endl;
+		}
 	}
 };
 
