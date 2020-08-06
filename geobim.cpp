@@ -280,6 +280,7 @@ struct geobim_settings {
 	bool apply_openings, apply_openings_posthoc, debug, exact_segmentation, minkowski_triangles;
 	ifcopenshell::geometry::settings settings;
 	boost::optional<std::set<std::string>> entity_names;
+	bool entity_names_included;
 	IfcParse::IfcFile* file;
 };
 
@@ -915,10 +916,11 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 		("debug,d", "more verbose log messages")
 		("openings,o", "whether to process opening subtractions")
 		("timings,t", "print timings after execution")
-		("exact-segmentation,e", "use exact kernel in proximity tree for semantic association (not recommended)")
+		//("exact-segmentation,e", "use exact kernel in proximity tree for semantic association (not recommended)")
 		("openings-posthoc,O", "whether to process opening subtractions posthoc")
 		("minkowski-triangles,T", "force minkowski sum on individual triangles, slow..")
-		("entities,e", new po::typed_value<std::string, char>(&entities), "semicolon separated list of IFC entities to include")
+		("entities,e", new po::typed_value<std::string, char>(&entities), "semicolon separated list of IFC entities to include or exclude")
+		("exclude,x", "entities are to be excluded")
 		("input-file", new po::typed_value<std::string, char>(&settings.input_filename), "input IFC file")
 		("output-file", new po::typed_value<std::string, char>(&settings.output_filename), "output OBJ file")
 		("radii", boost::program_options::value<std::vector<std::string>>()->multitoken());
@@ -992,6 +994,7 @@ int parse_command_line(geobim_settings& settings, int argc, char** argv) {
 			settings.entity_names->clear();
 			settings.entity_names->insert(tokens.begin(), tokens.end());
 		}
+		settings.entity_names_included = !vmap.count("exclude");
 	}
 
 	return 0;
@@ -1010,13 +1013,18 @@ int process_geometries(geobim_settings& settings, Fn& fn) {
 	auto opening_settings = settings;
 	opening_settings.entity_names.emplace();
 	opening_settings.entity_names->insert("IfcOpeningElement");
+	opening_settings.entity_names_included = true;
 	if (settings.apply_openings_posthoc && settings.entity_names != opening_settings.entity_names) {
 		process_geometries(opening_settings, all_openings);
 	}
 
 	std::vector<ifcopenshell::geometry::filter_t> filters;
 	if (settings.entity_names) {
-		filters.push_back(IfcGeom::entity_filter(true, false, *settings.entity_names));
+		if (!settings.entity_names_included) {
+			settings.entity_names->insert("IfcSpace");
+			settings.entity_names->insert("IfcOpeningElement");
+		}
+		filters.push_back(IfcGeom::entity_filter(settings.entity_names_included, false, *settings.entity_names));
 	} else {
 		filters.push_back(IfcGeom::entity_filter(false, false, {"IfcSpace", "IfcOpeningElement"}));
 	}
