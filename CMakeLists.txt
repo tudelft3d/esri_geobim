@@ -171,7 +171,9 @@ include_directories(${OCC_INCLUDE_DIR} ${Boost_INCLUDE_DIRS} ${IFC_INCLUDE_DIR}
 ${EIGEN_DIR} ${CGAL_INCLUDE_DIR} ${GMP_INCLUDE_DIR} ${MPFR_INCLUDE_DIR} ${JSON_DIR})
 link_directories(${Boost_LIBRARY_DIRS})
 
-add_executable(tudelft_esri_geobim geobim.cpp)
+file(GLOB tudelft_esri_geobim_src "*.h" "*.cpp")
+
+add_executable(tudelft_esri_geobim ${tudelft_esri_geobim_src})
 target_link_libraries(tudelft_esri_geobim ${IFC_LIBRARIES} ${OCC_LIBRARIES} ${CGAL_LIBRARIES}
     ${MPFR_LIBRARIES} ${GMP_LIBRARIES} ${WS2_LIBRARIES} ${Boost_LIBRARIES})
 
