@@ -20,7 +20,11 @@ else()
 endif()
 
 if(UNIX)
-    set(IFCOPENSHELL_INSTALL ${IFCOPENSHELL_ROOT}/build/Linux/x86_64/install)
+    if(APPLE)
+        set(IFCOPENSHELL_INSTALL ${IFCOPENSHELL_ROOT}/build/Darwin/x86_64/10.9/install)
+    else()
+        set(IFCOPENSHELL_INSTALL ${IFCOPENSHELL_ROOT}/build/Linux/x86_64/install)
+    endif()
     
     foreach(occt_dir occt-7.3.0 occt-7.3.0p3)
         if(EXISTS "${IFCOPENSHELL_INSTALL}/${occt_dir}/")
@@ -43,8 +47,9 @@ if(UNIX)
 
     find_package(Threads)
     find_library(dl NAMES dl)
-
-    set(OCC_LIBRARIES -Wl,--start-group ${OCC_LIBRARIES} -Wl,--end-group ${CMAKE_THREAD_LIBS_INIT} ${dl})
+    if(NOT APPLE)
+        set(OCC_LIBRARIES -Wl,--start-group ${OCC_LIBRARIES} -Wl,--end-group ${CMAKE_THREAD_LIBS_INIT} ${dl})
+    endif()
     
     add_definitions(-Wno-deprecated-declarations)
 else()
