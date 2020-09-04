@@ -94,7 +94,7 @@ else()
     set(WS2_LIBRARIES ws2_32.lib)
 endif()
 
-set(BOOST_COMPONENTS regex program_options iostreams system)
+set(BOOST_COMPONENTS regex program_options iostreams system thread)
 
 # Find IfcOpenShell version
 file(READ "${IFCOPENSHELL_ROOT}/src/ifcparse/IfcParse.h" header)
