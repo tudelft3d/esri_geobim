@@ -60,7 +60,10 @@ int main(int argc, char** argv) {
 		process_geometries(settings, callback);
 
 		std::cout << "done processing geometries" << std::endl;
-		delete settings.file;
+
+		for (auto& f : settings.file) {
+			delete f;
+		}		
 
 		auto T1 = timer::measure("semantic_segmentation");
 		if (settings.exact_segmentation) {

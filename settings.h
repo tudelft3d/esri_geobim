@@ -13,13 +13,14 @@
 // Global settings that are derived from the command line invocation
 // parsed by Boost.ProgramOptions
 struct geobim_settings {
-	std::string input_filename, output_filename;
+	std::vector<std::string> input_filenames;
+	std::string output_filename;
 	std::vector<double> radii;
 	bool apply_openings, apply_openings_posthoc, debug, exact_segmentation, minkowski_triangles;
 	ifcopenshell::geometry::settings settings;
 	boost::optional<std::set<std::string>> entity_names;
 	bool entity_names_included;
-	IfcParse::IfcFile* file;
+	std::vector<IfcParse::IfcFile*> file;
 };
 
 // Parse the command line settings and do basic initialization

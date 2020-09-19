@@ -11,7 +11,9 @@ struct opening_collector : public execution_context {
 	std::map<IfcUtil::IfcBaseEntity*, IfcUtil::IfcBaseEntity*> opening_to_elem;
 	std::multimap<IfcUtil::IfcBaseEntity*, shape_callback_item*> map;
 
+	void init(IfcParse::IfcFile* f);
 	opening_collector(IfcParse::IfcFile* f);
+	opening_collector(const std::vector<IfcParse::IfcFile*>& f);
 	void operator()(shape_callback_item& item);
 };
 
