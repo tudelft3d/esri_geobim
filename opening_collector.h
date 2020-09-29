@@ -15,6 +15,10 @@ struct opening_collector : public execution_context {
 	opening_collector(IfcParse::IfcFile* f);
 	opening_collector(const std::vector<IfcParse::IfcFile*>& f);
 	void operator()(shape_callback_item& item);
+
+private:
+	opening_collector(const opening_collector&) = delete;
+	opening_collector& operator=(const opening_collector&) = delete;
 };
 
 #endif

@@ -37,7 +37,7 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 	opening_settings.entity_names->insert("IfcOpeningElement");
 	opening_settings.entity_names_included = true;
 	if (settings.apply_openings_posthoc && settings.entity_names != opening_settings.entity_names) {
-		process_geometries(opening_settings, all_openings);
+		process_geometries(opening_settings, std::ref(all_openings));
 	}
 
 	std::vector<ifcopenshell::geometry::filter_t> filters;
