@@ -111,7 +111,7 @@ endif()
 if(UNIX)
     set(BOOST_ROOT       ${IFCOPENSHELL_INSTALL}/boost-1.69.0)
     
-    set(EIGEN_DIR        ${IFCOPENSHELL_INSTALL}/Eigen-3.3.7)
+    set(EIGEN_DIR        ${IFCOPENSHELL_INSTALL}/eigen-3.3.7)
 
 	set(JSON_DIR         ${IFCOPENSHELL_INSTALL}/json)
     
