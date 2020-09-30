@@ -90,7 +90,7 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 
 			std::cout << "Processing: " << geom_object->product()->data().toString() << std::endl;
 
-			const auto& n = *geom_object->transformation().data().components;
+			const auto& n = geom_object->transformation().data().ccomponents();
 			const cgal_placement_t element_transformation(
 				n(0, 0), n(0, 1), n(0, 2), n(0, 3),
 				n(1, 0), n(1, 1), n(1, 2), n(1, 3),
@@ -118,8 +118,8 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 					if (edge->basis == nullptr && edge->start.which() == 0 && edge->end.which() == 0) {
 						const auto& p0 = boost::get<p>(edge->start);
 						const auto& p1 = boost::get<p>(edge->end);
-						Eigen::Vector4d P0 = p0.components->homogeneous();
-						Eigen::Vector4d P1 = p1.components->homogeneous();
+						Eigen::Vector4d P0 = p0.ccomponents().homogeneous();
+						Eigen::Vector4d P1 = p1.ccomponents().homogeneous();
 						auto V0 = n * P0;
 						auto V1 = n * P1;
 						std::cout << "Axis " << V0(0) << " " << V0(1) << " " << V0(2) << " -> "
@@ -132,7 +132,7 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 
 			for (auto& g : geom_object->geometry()) {
 				auto s = ((ifcopenshell::geometry::CgalShape*) g.Shape())->shape();
-				const auto& m = *g.Placement().components;
+				const auto& m = g.Placement().ccomponents();
 
 				const cgal_placement_t part_transformation(
 					m(0, 0), m(0, 1), m(0, 2), m(0, 3),
@@ -144,9 +144,9 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 					vertex->point() = vertex->point().transform(part_transformation);
 				}
 
-				boost::optional<ifcopenshell::geometry::taxonomy::style> opt_style;
+				const ifcopenshell::geometry::taxonomy::style* opt_style;
 				if (g.hasStyle()) {
-					opt_style = g.Style();
+					opt_style = &g.Style();
 				}
 
 				shape_callback_item item{

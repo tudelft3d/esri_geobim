@@ -47,7 +47,7 @@ struct simple_obj_writer : public abstract_writer {
 
 	template <typename It>
 	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
-		const auto& diffuse = *(style ? style->diffuse.get_value_or(GRAY).components : GRAY.components);
+		const auto& diffuse = (style && style->diffuse.components_) ? style->diffuse.ccomponents() : GRAY.ccomponents();
 
 		obj << "g group-" << group_id << "\n";
 		obj << "usemtl m" << group_id << "\n";
@@ -97,7 +97,7 @@ struct city_json_writer : public abstract_writer {
 
 	template <typename It>
 	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
-		const auto& diffuse = *(style ? style->diffuse.get_value_or(GRAY).components : GRAY.components);
+		const auto& diffuse = (style && style->diffuse.components_) ? style->diffuse.ccomponents() : GRAY.ccomponents();
 
 		json material = json::object();
 		material["name"] = "material-" + boost::lexical_cast<std::string>(materials.size());

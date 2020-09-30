@@ -83,8 +83,8 @@ void global_execution_context<TreeKernel>::operator()(shape_callback_item& item)
 	// Group taxonomy::styles based on diffuse colour since we
 	// do not have an equality operator on it.
 	typename decltype(styles)::iterator sit = styles.begin();
-	if (item.style && item.style->diffuse) {
-		const auto& cc = *item.style->diffuse->components;
+	if (item.style && item.style->diffuse.components_) {
+		const auto& cc = item.style->diffuse.ccomponents();
 		auto c = std::make_pair(cc(0), std::make_pair(cc(1), cc(2)));
 		auto it = diffuse_to_style.find(c);
 		if (it == diffuse_to_style.end()) {
