@@ -127,5 +127,5 @@ void global_execution_context<TreeKernel>::operator()(shape_callback_item& item)
 	}
 }
 
-template class global_execution_context<CGAL::Epick>;
-template class global_execution_context<CGAL::Epeck>;
+template struct global_execution_context<CGAL::Epick>;
+template struct global_execution_context<CGAL::Epeck>;
