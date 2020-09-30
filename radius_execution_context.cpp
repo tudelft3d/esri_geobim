@@ -68,21 +68,39 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	}
 
 	bool result_set = false;
+	bool failed = false;
 
 	if (!(minkowski_triangles_ || !item_nef_succeeded || !self_intersections.empty())) {
 		item_nef.transform(item.transformation);
 
 		auto T0 = timer::measure("minkowski_sum");
 		try {
-			result = CGAL::minkowski_sum_3(item_nef, padding_cube);
+			CGAL::Nef_polyhedron_3<Kernel_>* item_nef_copy = new CGAL::Nef_polyhedron_3<Kernel_>(item_nef);
+			result = CGAL::minkowski_sum_3(*item_nef_copy, padding_cube);
+			// So this is funky, we got segfaults in the destructor when exceptions were
+			// raised, so we only delete when minkowski (actually the convex_decomposition)
+			// succeed. Otherwise, we just have to incur some memory leak.
+			// @todo report this to cgal.
+			delete item_nef_copy;
 			result_set = true;
 		} catch (CGAL::Failure_exception&) {
+			failed = true;
 			std::cerr << "Minkowski on volume failed, retrying with individual triangles" << std::endl;
 		}
 		T0.stop();
 	}
 
-	if (!result_set) {
+	if (!result_set && failed && poly_triangulated.size_of_facets() > 1000) {
+
+		std::cerr << "Too many individual triangles, using bounding box" << std::endl;
+		auto bb = CGAL::Polygon_mesh_processing::bbox(item.polyhedron);
+		cgal_point_t lower(bb.min(0) - radius, bb.min(1) - radius, bb.min(2) - radius);
+		cgal_point_t upper(bb.max(0) + radius, bb.max(1) + radius, bb.max(2) + radius);
+		auto bbpl = ifcopenshell::geometry::utils::create_cube(lower, upper);
+		result = ifcopenshell::geometry::utils::create_nef_polyhedron(bbpl);
+
+	} else if (!result_set) {
+		
 		auto T2 = timer::measure("self_intersection_handling");
 
 		if (self_intersections.size()) {
