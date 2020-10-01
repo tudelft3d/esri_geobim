@@ -144,7 +144,7 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 					vertex->point() = vertex->point().transform(part_transformation);
 				}
 
-				const ifcopenshell::geometry::taxonomy::style* opt_style;
+				const ifcopenshell::geometry::taxonomy::style* opt_style = nullptr;
 				if (g.hasStyle()) {
 					opt_style = &g.Style();
 				}
