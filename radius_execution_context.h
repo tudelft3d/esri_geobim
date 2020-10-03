@@ -6,6 +6,43 @@
 
 #include <CGAL/Nef_nary_union_3.h>
 
+template <typename T>
+class lazy_nary_union {
+	std::list<T> a;
+	CGAL::Nef_nary_union_3<T> b, empty;
+	T c;
+	int state = 0;
+
+public:
+	void add_polyhedron(const T& t) {
+		if (state == 0) {
+			a.push_back(t);
+		} else {
+			throw std::runtime_error("");
+		}
+	}
+
+	const T& get_union() {
+		if (state == 0) {
+			++state;
+			for (auto& p : a) {
+				b.add_polyhedron(p);
+			}
+			++state;
+			if (!a.empty()) {
+				c = b.get_union();
+			}
+		}
+		return c;
+	}
+
+	void clear() {
+		state = 0;
+		a.clear();
+		b = empty;
+	}
+};
+
 // State (polyhedra mostly) that are relevant only for one radius
 struct radius_execution_context : public execution_context {
 	double radius;
@@ -19,7 +56,7 @@ struct radius_execution_context : public execution_context {
 
 	IfcUtil::IfcBaseEntity* previous_src = nullptr;
 	std::string previous_geom_ref;
-	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > per_product_collector;
+	lazy_nary_union<CGAL::Nef_polyhedron_3<Kernel_> > per_product_collector;
 	cgal_placement_t last_place;
 
 	void operator()(shape_callback_item& item);

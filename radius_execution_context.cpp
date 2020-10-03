@@ -46,7 +46,8 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 			union_collector.add_polyhedron(product);
 			return;
 		}
-		per_product_collector = CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> >();
+		// per_product_collector = CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> >();
+		per_product_collector.clear();
 	}
 
 	CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
