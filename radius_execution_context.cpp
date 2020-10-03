@@ -96,9 +96,39 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 		T0.stop();
 	}
 
-	if (!result_set && failed && poly_triangulated.size_of_facets() > 1000) {
+	double max_triangle_area = 0.;
 
-		std::cerr << "Too many individual triangles, using bounding box" << std::endl;
+	for (auto &face : faces(poly_triangulated)) {
+
+		if (!face->is_triangle()) {
+			std::cout << "Warning: non-triangular face!" << std::endl;
+			continue;
+		}
+
+		CGAL::Polyhedron_3<CGAL::Epick>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
+		CGAL::Point_3<CGAL::Epick> points[3];
+
+		int i = 0;
+		do {
+			points[i] = current_halfedge->vertex()->point();
+			++i;
+			++current_halfedge;
+		} while (current_halfedge != face->facet_begin());
+
+		double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<CGAL::Epick>(points[0], points[1], points[2]).squared_area()));
+
+		if (A > max_triangle_area) {
+			max_triangle_area = A;
+		}
+	}
+
+	if (!result_set && (poly_triangulated.size_of_facets() > 1000 || max_triangle_area < 1.e-5)) {
+
+		if (poly_triangulated.size_of_facets() > 1000) {
+			std::cerr << "Too many individual triangles, using bounding box" << std::endl;
+		} else {
+			std::cerr << "Max triangle area is " << max_triangle_area << ", using bounding box" << std::endl;
+		}
 		auto bb = CGAL::Polygon_mesh_processing::bbox(item.polyhedron);
 		cgal_point_t lower(bb.min(0) - radius, bb.min(1) - radius, bb.min(2) - radius);
 		cgal_point_t upper(bb.max(0) + radius, bb.max(1) + radius, bb.max(2) + radius);
