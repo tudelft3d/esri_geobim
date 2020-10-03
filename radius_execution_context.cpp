@@ -228,6 +228,34 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 
 		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > opening_union;
 		for (auto& op : item.openings) {
+
+			const auto& xdir = *item.wall_direction;
+			double min_dot = +std::numeric_limits<double>::infinity();
+			double max_dot = -std::numeric_limits<double>::infinity();
+
+			for (const auto& v : vertices(op->polyhedron)) {
+				auto p = v->point();
+				p = p.transform(op->transformation);
+				Eigen::Vector3d vv(
+					CGAL::to_double(p.cartesian(0)),
+					CGAL::to_double(p.cartesian(1)),
+					CGAL::to_double(p.cartesian(2))
+				);
+				double d = xdir.dot(vv);
+				if (d < min_dot) {
+					min_dot = d;
+				}
+				if (d > max_dot) {
+					max_dot = d;
+				}
+			}
+
+			if ((max_dot - min_dot) < radius * 2) {
+				std::cerr << "Opening too narrow to have effect after incorporating radius, skipping" << std::endl;
+				continue;
+			}
+
+
 			auto bounds = create_bounding_box(op->polyhedron);
 			CGAL::Nef_polyhedron_3<Kernel_> opening_nef;
 			if (!op->to_nef_polyhedron(opening_nef)) {
