@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
 		bool first = true;
 		for (double r : settings.radii) {
 			// 2nd is narrower (depending on ifdef above, appears to be necessary).
-			radius_contexts.emplace_back(r, !first, settings.minkowski_triangles);
+			radius_contexts.emplace_back(r, !first, settings.minkowski_triangles, settings.no_erosion);
 			first = false;
 		}
 
@@ -74,6 +74,10 @@ int main(int argc, char** argv) {
 		T1.stop();
 
 		for (auto& c : radius_contexts) {
+			if (c.empty()) {
+				continue;
+			}
+
 			c.finalize();
 
 			auto T0 = timer::measure("semantic_segmentation");

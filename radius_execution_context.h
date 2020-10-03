@@ -13,9 +13,9 @@ struct radius_execution_context : public execution_context {
 	CGAL::Nef_polyhedron_3<Kernel_> padding_cube, padding_cube_2, boolean_result, exterior, bounding_box, complement, complement_padded;
 	cgal_shape_t polyhedron, polyhedron_exterior;
 	enum extract_component { INTERIOR, EXTERIOR };
-	bool minkowski_triangles_;
+	bool minkowski_triangles_, no_erosion_, empty_;
 
-	radius_execution_context(double r, bool narrower = false, bool minkowski_triangles = false);
+	radius_execution_context(double r, bool narrower = false, bool minkowski_triangles = false, bool no_erosion = false);
 
 	IfcUtil::IfcBaseEntity* previous_src = nullptr;
 	std::string previous_geom_ref;
@@ -32,6 +32,8 @@ struct radius_execution_context : public execution_context {
 
 	// Completes the boolean union, extracts exterior and erodes padding radius
 	void finalize();
+
+	bool empty() const { return empty_; }
 };
 
 #endif

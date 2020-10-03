@@ -12,7 +12,12 @@
 
 #include <CGAL/boost/graph/convert_nef_polyhedron_to_polygon_mesh.h>
 
-radius_execution_context::radius_execution_context(double r, bool narrower, bool minkowski_triangles) : radius(r), minkowski_triangles_(minkowski_triangles) {
+radius_execution_context::radius_execution_context(double r, bool narrower, bool minkowski_triangles, bool no_erosion)
+	: radius(r)
+	, minkowski_triangles_(minkowski_triangles) 
+	, no_erosion_(no_erosion)
+	, empty_(true)
+{
 	{
 		auto polycube = ifcopenshell::geometry::utils::create_cube(r);
 		padding_cube = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
@@ -222,6 +227,8 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 
 	union_collector.add_polyhedron(result);
 	per_product_collector.add_polyhedron(result);
+
+	empty_ = false;
 }
 
 // Extract the exterior component of a CGAL Polyhedron
@@ -296,53 +303,59 @@ void radius_execution_context::finalize() {
 		T.stop();
 	}
 
-	auto T2 = timer::measure("result_nef_processing");
-	polyhedron = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
+	if (no_erosion_) {
+		exterior = boolean_result;
+	} else {
 
-	{
-		simple_obj_writer tmp_debug("debug-after-boolean");
-		tmp_debug(nullptr, polyhedron.facets_begin(), polyhedron.facets_end());
-	}
+		auto T2 = timer::measure("result_nef_processing");
+		polyhedron = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
 
-	// @todo Wasteful: remove interior on Nef?
-	polyhedron_exterior = extract(polyhedron, EXTERIOR);
+		{
+			simple_obj_writer tmp_debug("debug-after-boolean");
+			tmp_debug(nullptr, polyhedron.facets_begin(), polyhedron.facets_end());
+		}
 
-	{
-		simple_obj_writer tmp_debug("debug-exterior");
-		tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
-	}
+		// @todo Wasteful: remove interior on Nef?
+		polyhedron_exterior = extract(polyhedron, EXTERIOR);
 
-	exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
-	bounding_box = create_bounding_box(polyhedron);
+		{
+			simple_obj_writer tmp_debug("debug-exterior");
+			tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
+		}
 
-	complement = bounding_box - exterior;
-	complement.extract_regularization();
-	// @nb padding cube is potentially slightly larger to result in a thinner result
-	// then another radius for comparison.
-	complement_padded = CGAL::minkowski_sum_3(complement, padding_cube_2);
-	complement_padded.extract_regularization();
-	T2.stop();
+		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
+		bounding_box = create_bounding_box(polyhedron);
 
-	{
-		auto T = timer::measure("result_nef_to_poly");
+		complement = bounding_box - exterior;
+		complement.extract_regularization();
+		// @nb padding cube is potentially slightly larger to result in a thinner result
+		// then another radius for comparison.
+		complement_padded = CGAL::minkowski_sum_3(complement, padding_cube_2);
+		complement_padded.extract_regularization();
+		T2.stop();
+
+		{
+			auto T = timer::measure("result_nef_to_poly");
 #if 0
-		// @todo I imagine this operation is costly, we can also convert the padded complement to
-		// polyhedron, and remove the connected component that belongs to the bbox, then reverse
-		// the remaining poly to point to the interior?
-		exterior -= complement_padded;
+			// @todo I imagine this operation is costly, we can also convert the padded complement to
+			// polyhedron, and remove the connected component that belongs to the bbox, then reverse
+			// the remaining poly to point to the interior?
+			exterior -= complement_padded;
 #else
-		// Rougly twice as fast as the complexity is half (box complexity is negligable).
+			// Rougly twice as fast as the complexity is half (box complexity is negligable).
 
-		// Re above: extracting the interior shell did not prove to be reliable even with
-		// the undocumented function convert_inner_shell_to_polyhedron(). Therefore we
-		// subtract from the padded box as that will have lower complexity than above.
-		// Mark_bounded_volumes on the completement also did not work.
-		exterior = bounding_box - complement_padded;
+			// Re above: extracting the interior shell did not prove to be reliable even with
+			// the undocumented function convert_inner_shell_to_polyhedron(). Therefore we
+			// subtract from the padded box as that will have lower complexity than above.
+			// Mark_bounded_volumes on the completement also did not work.
+			exterior = bounding_box - complement_padded;
 #endif
-		T.stop();
-	}
+			T.stop();
+		}
 
-	exterior.extract_regularization();
+		exterior.extract_regularization();
+
+	}
 
 	if (exterior.is_simple()) {
 		auto T1 = timer::measure("result_nef_to_poly");

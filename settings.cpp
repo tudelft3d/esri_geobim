@@ -16,6 +16,7 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 		("debug,d", "more verbose log messages")
 		("openings,o", "whether to process opening subtractions")
 		("timings,t", "print timings after execution")
+		("no-erosion,n", "don't apply erosion after union")
 		//("exact-segmentation,e", "use exact kernel in proximity tree for semantic association (not recommended)")
 		("openings-posthoc,O", "whether to process opening subtractions posthoc")
 		("minkowski-triangles,T", "force minkowski sum on individual triangles, slow..")
@@ -71,6 +72,7 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 	}
 
 	settings.apply_openings = vmap.count("openings");
+	settings.no_erosion = vmap.count("no-erosion");
 	settings.apply_openings_posthoc = vmap.count("openings-posthoc");
 	settings.exact_segmentation = vmap.count("exact-segmentation");
 	settings.debug = vmap.count("debug");

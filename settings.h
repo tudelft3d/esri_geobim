@@ -16,7 +16,7 @@ struct geobim_settings {
 	std::vector<std::string> input_filenames;
 	std::string output_filename;
 	std::vector<double> radii;
-	bool apply_openings, apply_openings_posthoc, debug, exact_segmentation, minkowski_triangles;
+	bool apply_openings, apply_openings_posthoc, debug, exact_segmentation, minkowski_triangles, no_erosion;
 	ifcopenshell::geometry::settings settings;
 	boost::optional<std::set<std::string>> entity_names;
 	bool entity_names_included;
