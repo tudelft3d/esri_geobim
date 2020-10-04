@@ -232,6 +232,8 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 			const auto& xdir = *item.wall_direction;
 			double min_dot = +std::numeric_limits<double>::infinity();
 			double max_dot = -std::numeric_limits<double>::infinity();
+			double min_z = +std::numeric_limits<double>::infinity();
+			double max_z = -std::numeric_limits<double>::infinity();
 
 			for (const auto& v : vertices(op->polyhedron)) {
 				auto p = v->point();
@@ -248,6 +250,12 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 				if (d > max_dot) {
 					max_dot = d;
 				}
+				if (vv.z() < min_z) {
+					min_z = vv.z();
+				}
+				if (vv.z() > max_z) {
+					max_z = vv.z();
+				}
 			}
 
 			if ((max_dot - min_dot) < radius * 2) {
@@ -255,6 +263,10 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 				continue;
 			}
 
+			if ((max_z - min_z) < radius * 2) {
+				std::cerr << "Opening too narrow to have effect after incorporating radius, skipping" << std::endl;
+				continue;
+			}
 
 			auto bounds = create_bounding_box(op->polyhedron);
 			CGAL::Nef_polyhedron_3<Kernel_> opening_nef;
