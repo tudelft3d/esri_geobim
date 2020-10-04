@@ -258,6 +258,12 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 				}
 			}
 
+			// These are basically workarounds for a bug in
+			// nary_union<T> which is also used on minkowski of concave operands.
+			// It segaults on getting front() of an empty queue.
+			// with the patch https://patch-diff.githubusercontent.com/raw/CGAL/cgal/pull/4768.patch
+			// (applied now by the IfcOpenShell build script)
+			// these fixes are not necessary anymore.
 			if ((max_dot - min_dot) < radius * 2) {
 				std::cerr << "Opening too narrow to have effect after incorporating radius, skipping" << std::endl;
 				continue;
