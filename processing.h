@@ -30,6 +30,32 @@ struct shape_callback_item {
 	bool to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef);
 };
 
+// Light weight representation to be stored in global exec context
+struct rgb : public std::pair<double, std::pair<double, double>> {
+	rgb(double r, double g, double b)
+		: std::pair<double, std::pair<double, double>>(r, { g, b }) {}
+	rgb(const Eigen::Vector3d& v)
+		: std::pair<double, std::pair<double, double>>(v(0), { v(1), v(2) }) {}
+
+	double& r() { return this->first; }
+	const double& r() const { return this->first; }
+
+	double& g() { return this->second.first; }
+	const double& g() const { return this->second.first; }
+
+	double& b() { return this->second.second; }
+	const double& b() const { return this->second.second; }
+};
+
+// Light weight representation to be stored in global exec context
+struct item_info {
+	// @nb we don't store a reference to the ifcopenshell entity instance so the files can be freed from memory
+	// we can store a const reference to the ifcopenshell latebound schema type names.
+	const std::string& entity_type;
+	std::string guid;
+	rgb* diffuse;
+};
+
 // Prototype of a context to which processed shapes will be fed
 struct execution_context {
 	virtual void operator()(shape_callback_item&) = 0;

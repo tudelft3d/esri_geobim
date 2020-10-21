@@ -308,45 +308,75 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	empty_ = false;
 }
 
+namespace {
+	double bbox_diagonal(const CGAL::Bbox_3& b) {
+		return std::sqrt(
+			(b.xmax() - b.xmin()) * (b.xmax() - b.xmin()) +
+			(b.ymax() - b.ymin()) * (b.ymax() - b.ymin()) +
+			(b.zmax() - b.zmin()) * (b.zmax() - b.zmin())
+		);
+	}
+}
+
 // Extract the exterior component of a CGAL Polyhedron
 
-cgal_shape_t radius_execution_context::extract(const cgal_shape_t & input, extract_component component) const {
+void radius_execution_context::extract_in_place(cgal_shape_t& input, extract_component component) const {
 	if (input.facets_begin() == input.facets_end()) {
 		throw std::runtime_error("Empty input operand to extract()");
 	}
 
-	// Input is going to be mutated, so make a copy first
-	cgal_shape_t input_copy = input;
-
-	Kernel_::FT max_x = -1e9;
 	cgal_shape_t::Vertex_handle left_most_vertex;
-	for (auto it = input_copy.edges_begin(); it != input_copy.edges_end(); ++it) {
-		auto vx = it->vertex()->point().cartesian(0);
-		if (vx > max_x) {
-			max_x = vx;
-			left_most_vertex = it->vertex();
+
+	std::list<cgal_shape_t::Facet_handle> connected;
+
+	while (true) {
+
+		Kernel_::FT max_x = -1e9;
+		for (auto it = input.edges_begin(); it != input.edges_end(); ++it) {
+			auto vx = it->vertex()->point().cartesian(0);
+			if (vx > max_x) {
+				max_x = vx;
+				left_most_vertex = it->vertex();
+			}
+		}
+
+		std::set<cgal_shape_t::Facet_handle> empty;
+		connected = connected_faces(left_most_vertex->halfedge()->facet(), empty);
+
+		auto complete_bbox = CGAL::Polygon_mesh_processing::bbox(input);
+		CGAL::Bbox_3 component_bbox;
+
+		for (auto& f : connected) {
+			component_bbox += CGAL::Polygon_mesh_processing::face_bbox(f, input);
+		}
+
+		if (bbox_diagonal(component_bbox) * 10. > bbox_diagonal(complete_bbox)) {
+			break;
+		} else {
+			// Cull away small components
+			input.erase_connected_component(left_most_vertex->halfedge());
 		}
 	}
 
-
 	if (component == EXTERIOR) {
-		std::set<cgal_shape_t::Facet_handle> empty;
-		auto connected = connected_faces(left_most_vertex->halfedge()->facet(), empty);
-
 		std::set<cgal_shape_t::Facet_handle> outer_facets(connected.begin(), connected.end());
 
-		while (std::distance(input_copy.facets_begin(), input_copy.facets_end()) > outer_facets.size()) {
-			for (auto it = input_copy.facets_begin(); it != input_copy.facets_end(); ++it) {
+		while (std::distance(input.facets_begin(), input.facets_end()) > outer_facets.size()) {
+			for (auto it = input.facets_begin(); it != input.facets_end(); ++it) {
 				if (outer_facets.find(&*it) == outer_facets.end()) {
-					input_copy.erase_connected_component(it->halfedge());
+					input.erase_connected_component(it->halfedge());
 					break;
 				}
 			}
 		}
 	} else {
-		input_copy.erase_connected_component(left_most_vertex->halfedge());
+		input.erase_connected_component(left_most_vertex->halfedge());
 	}
+}
 
+cgal_shape_t radius_execution_context::extract(const cgal_shape_t& input, extract_component component) const {
+	auto input_copy = input;
+	extract_in_place(input_copy, component);
 	return input_copy;
 }
 
@@ -385,15 +415,15 @@ void radius_execution_context::finalize() {
 	} else {
 
 		auto T2 = timer::measure("result_nef_processing");
-		polyhedron = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
+		polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(boolean_result);
 
 		{
 			simple_obj_writer tmp_debug("debug-after-boolean");
-			tmp_debug(nullptr, polyhedron.facets_begin(), polyhedron.facets_end());
+			tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
 		}
 
 		// @todo Wasteful: remove interior on Nef?
-		polyhedron_exterior = extract(polyhedron, EXTERIOR);
+		extract_in_place(polyhedron_exterior, EXTERIOR);
 
 		{
 			simple_obj_writer tmp_debug("debug-exterior");
@@ -401,7 +431,7 @@ void radius_execution_context::finalize() {
 		}
 
 		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
-		bounding_box = create_bounding_box(polyhedron);
+		bounding_box = create_bounding_box(polyhedron_exterior);
 
 		complement = bounding_box - exterior;
 		complement.extract_regularization();

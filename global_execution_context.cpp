@@ -9,7 +9,7 @@ global_execution_context<TreeKernel>::global_execution_context()
 #endif;
 {
 	// style 0 is for elements without style annotations
-	styles.emplace_back();
+	infos.push_back(nullptr);
 }
 
 template<typename TreeKernel>
@@ -20,10 +20,10 @@ void global_execution_context<TreeKernel>::finalize() {
 
 template<typename TreeKernel>
 typename global_execution_context<TreeKernel>::segmentation_return_type global_execution_context<TreeKernel>::segment(const cgal_shape_t & input) {
-	segmentation_return_type result(styles.size());
-	auto it = styles.begin();
-	for (size_t i = 0; i < styles.size(); ++i, ++it) {
-		result[i].first = i ? &*it : nullptr;
+	segmentation_return_type result(infos.size());
+	auto it = infos.begin();
+	for (size_t i = 0; i < infos.size(); ++i, ++it) {
+		result[i].first = i ? *it : nullptr;
 	}
 
 	CGAL::Cartesian_converter<Kernel_, TreeKernel> converter;
@@ -66,9 +66,9 @@ typename global_execution_context<TreeKernel>::segmentation_return_type global_e
 
 		auto pair = tree.closest_point_and_primitive(f_c_ic);
 		typename TreeShapeType::Face_handle F = pair.second.first;
-		auto it = facet_to_style.find(F);
-		if (it != facet_to_style.end()) {
-			int sid = std::distance(styles.cbegin(), it->second);
+		auto it = facet_to_info.find(F);
+		if (it != facet_to_info.end()) {
+			int sid = std::distance(infos.cbegin(), std::find(infos.cbegin(), infos.cend(), it->second));
 			result[sid].second.push_back(f);
 		}
 	}
@@ -78,30 +78,13 @@ typename global_execution_context<TreeKernel>::segmentation_return_type global_e
 
 template<typename TreeKernel>
 void global_execution_context<TreeKernel>::operator()(shape_callback_item& item) {
-	size_t style_idx = item.style ? styles.size() : 0;
-
-	// Group taxonomy::styles based on diffuse colour since we
-	// do not have an equality operator on it.
-	typename decltype(styles)::iterator sit = styles.begin();
-	if (item.style && item.style->diffuse.components_) {
-		const auto& cc = item.style->diffuse.ccomponents();
-		auto c = std::make_pair(cc(0), std::make_pair(cc(1), cc(2)));
-		auto it = diffuse_to_style.find(c);
-		if (it == diffuse_to_style.end()) {
-			styles.push_back(*item.style);
-			sit = --styles.end();
-			diffuse_to_style.insert({ c, sit });
-		} else {
-			sit = it->second;
-		}
-	}
-	/*
-	auto p = item.polyhedron;
-	// Apply transformation
-	for (auto &vertex : vertices(p)) {
-		vertex->point() = vertex->point().transform(item.transformation);
-	}
-	*/
+	rgb* diffuse = item.style ? new rgb(item.style->diffuse.ccomponents()) : (rgb*) nullptr;
+	item_info* info = new item_info{
+		item.src->declaration().name(),
+		item.src->get_value<std::string>("GlobalId"),
+		diffuse
+	};
+	infos.push_back(info);
 
 	TreeShapeType tree_polyhedron;
 	util::copy::polyhedron(tree_polyhedron, item.polyhedron);
@@ -123,9 +106,10 @@ void global_execution_context<TreeKernel>::operator()(shape_callback_item& item)
 
 	for (auto& f : faces(triangulated_shape_memory.back())) {
 		typename TreeShapeType::Facet_handle F = f;
-		facet_to_style.insert({ F, sit });
+		facet_to_info.insert({ F, info });
 	}
 }
 
 template struct global_execution_context<CGAL::Epick>;
 template struct global_execution_context<CGAL::Epeck>;
+template struct global_execution_context<CGAL::Simple_cartesian<double>>;

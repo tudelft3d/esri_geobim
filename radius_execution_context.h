@@ -48,7 +48,7 @@ struct radius_execution_context : public execution_context {
 	double radius;
 	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > union_collector;
 	CGAL::Nef_polyhedron_3<Kernel_> padding_cube, padding_cube_2, boolean_result, exterior, bounding_box, complement, complement_padded;
-	cgal_shape_t polyhedron, polyhedron_exterior;
+	cgal_shape_t polyhedron_exterior;
 	enum extract_component { INTERIOR, EXTERIOR };
 	bool minkowski_triangles_, no_erosion_, empty_;
 
@@ -63,6 +63,7 @@ struct radius_execution_context : public execution_context {
 
 	// Extract the exterior component of a CGAL Polyhedron
 	cgal_shape_t extract(const cgal_shape_t& input, extract_component component) const;
+	void extract_in_place(cgal_shape_t& input, extract_component component) const;
 
 	// Create a bounding box (six-faced Nef poly) around a CGAL Polyhedron
 	CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t& input) const;

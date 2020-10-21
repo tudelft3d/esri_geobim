@@ -1,6 +1,8 @@
 #ifndef WRITER_H
 #define WRITER_H
 
+#include "processing.h"
+
 #include <ifcgeom/kernels/cgal/CgalKernel.h>
 
 #include <nlohmann/json.hpp>
@@ -36,7 +38,7 @@ struct simple_obj_writer : public abstract_writer {
 	int group_id = 1;
 	int vertex_count = 1;
 	std::ofstream obj, mtl;
-	ifcopenshell::geometry::taxonomy::colour GRAY;
+	rgb GRAY;
 
 	simple_obj_writer(const std::string& fn_prefix)
 		: obj((fn_prefix + ".obj").c_str())
@@ -46,13 +48,13 @@ struct simple_obj_writer : public abstract_writer {
 	}
 
 	template <typename It>
-	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
-		const auto& diffuse = (style && style->diffuse.components_) ? style->diffuse.ccomponents() : GRAY.ccomponents();
+	void operator()(const item_info* info, It begin, It end) {
+		const auto& diffuse = info && info->diffuse ? *info->diffuse : GRAY;
 
-		obj << "g group-" << group_id << "\n";
+		obj << "g " << (info ? info->guid : "unknown") << "\n";
 		obj << "usemtl m" << group_id << "\n";
 		mtl << "newmtl m" << group_id << "\n";
-		mtl << "kd " << diffuse(0) << " " << diffuse(1) << " " << diffuse(2) << "\n";
+		mtl << "kd " << diffuse.r() << " " << diffuse.g() << " " << diffuse.b() << "\n";
 
 		group_id++;
 
@@ -73,8 +75,44 @@ struct simple_obj_writer : public abstract_writer {
 	}
 };
 
+namespace {
+
+	struct predicate_always {
+		bool operator()(const Eigen::Vector3d&) const {
+			return true;
+		}
+	};
+
+	struct predicate_is_up {
+		bool operator()(const Eigen::Vector3d& norm) const {
+			return norm(2) > 0.;
+		}
+	};
+
+	std::string map_semantics(const std::string& ifc, const Eigen::Vector3d& norm) {
+		static predicate_always always;
+		static predicate_is_up is_up;
+
+		static std::vector<std::pair<std::pair<std::string, std::function<bool(const Eigen::Vector3d&)>>, std::string>> mappings {
+			{{"IfcSlab", is_up}, "RoofSurface"},
+			{{"IfcSlab", always}, "GroundSurface"},
+			{{"IfcWall", always}, "WallSurface"},
+			{{"IfcWindow", always}, "Window"},
+			{{"IfcDoor", always}, "Door"},
+		};
+
+		for (auto& m : mappings) {
+			if (m.first.first == ifc && m.first.second(norm)) {
+				return m.second;
+			}
+		}
+
+		return "ClosureSurface";
+	};
+}
+
 struct city_json_writer : public abstract_writer {
-	ifcopenshell::geometry::taxonomy::colour GRAY;
+	rgb GRAY;
 
 	using json = nlohmann::json;
 
@@ -83,25 +121,27 @@ struct city_json_writer : public abstract_writer {
 	std::vector<std::array<double, 3>> vertices;
 	std::vector<std::vector<std::vector<std::vector<int>>>> boundaries;
 	std::vector<std::vector<int>> boundary_materials;
+	std::vector<json> boundary_semantics;
+	std::vector<int> boundary_semantics_values;
 
 	json materials;
 
 	city_json_writer(const std::string& fn_prefix)
 		: filename(fn_prefix + ".json")
 		, materials(json::array())
-		, GRAY(0.6, 0.6, 0.6) {
-		// assumes one solid.
+		, GRAY(0.6, 0.6, 0.6)
+	{		
 		boundaries.emplace_back();
 		boundary_materials.emplace_back();
 	}
 
 	template <typename It>
-	void operator()(const ifcopenshell::geometry::taxonomy::style* style, It begin, It end) {
-		const auto& diffuse = (style && style->diffuse.components_) ? style->diffuse.ccomponents() : GRAY.ccomponents();
+	void operator()(const item_info* info, It begin, It end) {
+		const auto& diffuse = info && info->diffuse ? *info->diffuse : GRAY;
 
 		json material = json::object();
 		material["name"] = "material-" + boost::lexical_cast<std::string>(materials.size());
-		material["diffuseColor"] = std::array<double, 3>{diffuse(0), diffuse(1), diffuse(2)};
+		material["diffuseColor"] = std::array<double, 3>{diffuse.r(), diffuse.g(), diffuse.b()};
 		material["specularColor"] = std::array<double, 3>{0., 0., 0.};
 		material["shininess"] = 0.;
 		material["isSmooth"] = false;
@@ -118,8 +158,19 @@ struct city_json_writer : public abstract_writer {
 					CGAL::to_double(points[i].cartesian(2))
 				} });
 			}
-			boundaries.front().push_back({ faces });
-			boundary_materials.front().push_back(materials.size() - 1);
+
+			Eigen::Vector3d a, b, c;
+			a << vertices[faces[0]][0], vertices[faces[0]][1], vertices[faces[0]][2];
+			b << vertices[faces[1]][0], vertices[faces[1]][1], vertices[faces[1]][2];
+			c << vertices[faces[2]][0], vertices[faces[2]][1], vertices[faces[2]][2];
+			Eigen::Vector3d norm = (b - a).cross(c - a);
+
+			boundaries.back().push_back({ faces });
+			boundary_materials.back().push_back(materials.size() - 1);
+			json json_type = json::object();
+			json_type["type"] = map_semantics(info ? info->entity_type : "x", norm);
+			boundary_semantics.push_back(json_type);  
+			boundary_semantics_values.push_back(boundary_semantics_values.size());
 		}
 	}
 
@@ -136,16 +187,13 @@ struct city_json_writer : public abstract_writer {
 		auto& building1 = city["CityObjects"]["id-1"];
 		building1["type"] = "Building";
 		building1["geographicalExtent"] = std::array<double, 6>{0, 0, 0, 1, 1, 1};
-		/*
-		building1["attributes"]["measuredHeight"] = 22.3;
-		building1["attributes"]["roofType"] = "gable";
-		building1["attributes"]["owner"] = "Elvis Presley";
-		*/
 
 		json geom = json::object();
 		geom["type"] = "Solid";
 		geom["lod"] = 2;
 		geom["boundaries"] = boundaries;
+		geom["semantics"]["values"][0] = boundary_semantics_values;
+		geom["semantics"]["surfaces"] = boundary_semantics;
 		geom["material"]["diffuse"]["values"] = boundary_materials;
 		building1["geometry"].push_back(geom);
 
