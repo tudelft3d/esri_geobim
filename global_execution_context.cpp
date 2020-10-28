@@ -6,7 +6,7 @@ template<typename TreeKernel>
 global_execution_context<TreeKernel>::global_execution_context()
 #ifdef GEOBIM_DEBUG
 	: obj_("debug-tree")
-#endif;
+#endif
 {
 	// style 0 is for elements without style annotations
 	infos.push_back(nullptr);
