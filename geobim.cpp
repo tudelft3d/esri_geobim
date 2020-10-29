@@ -24,7 +24,9 @@ int main(int argc, char** argv) {
 	geobim_settings settings;
 	parse_command_line(settings, argc, argv);
 
-	global_execution_context<CGAL::Simple_cartesian<double>> global_context;
+	// global_execution_context<CGAL::Simple_cartesian<double>> global_context;
+	// Epick seems to have better performance?
+	global_execution_context<CGAL::Epick> global_context;
 	global_execution_context<Kernel_> global_context_exact;
 
 	shape_callback callback;
