@@ -5,6 +5,8 @@
 #include "writer.h"
 #include "opening_collector.h"
 
+#include <thread>
+
 bool shape_callback_item::to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef) {
 	auto T1 = timer::measure("ifc_element_to_nef");
 	nef = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron);
@@ -53,7 +55,7 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 
 	for (auto f : settings.file) {
 
-		ifcopenshell::geometry::Iterator context_iterator("cgal", settings.settings, f, filters);
+		ifcopenshell::geometry::Iterator context_iterator("cgal", settings.settings, f, filters, std::thread::hardware_concurrency());
 
 		auto T = timer::measure("ifc_geometry_processing");
 		if (!context_iterator.initialize()) {
