@@ -210,7 +210,7 @@ struct external_element_collector : public abstract_writer {
 
 	std::string filename;
 	const std::list<item_info*>& all_infos;
-	std::set<item_info*> part_of_exterior;
+	std::set<const item_info*> part_of_exterior;
 
 	json data;
 
