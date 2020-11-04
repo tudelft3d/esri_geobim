@@ -205,4 +205,41 @@ struct city_json_writer : public abstract_writer {
 	}
 };
 
+struct external_element_collector : public abstract_writer {
+	using json = nlohmann::json;
+
+	std::string filename;
+	const std::list<item_info*>& all_infos;
+	std::set<item_info*> part_of_exterior;
+
+	json data;
+
+	external_element_collector(const std::string& fn_prefix, const std::list<item_info*>&)
+		: filename(fn_prefix + ".json")
+		, all_infos(all_infos)
+	{
+		data = json::array();
+	}
+
+	template <typename It>
+	void operator()(const item_info* info, It begin, It end) {
+		if (info) {
+			part_of_exterior.insert(info);
+		}
+	}
+
+	void finalize() {
+		for (auto& info : all_infos) {
+			json object = json::object();
+			object["guid"] = info->guid;
+			object["is_external"] = part_of_exterior.find(info) != part_of_exterior.end();
+		}
+		std::ofstream(filename.c_str()) << data;
+	}
+
+	~external_element_collector() {
+		finalize();
+	}
+};
+
 #endif

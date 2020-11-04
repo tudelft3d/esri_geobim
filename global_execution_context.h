@@ -45,6 +45,8 @@ struct global_execution_context : public execution_context {
 	void finalize();
 
 	segmentation_return_type segment(const cgal_shape_t& input);
+
+	const std::list<item_info*>& all_item_infos() const { return infos; }
 };
 
 #endif

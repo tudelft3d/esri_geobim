@@ -100,6 +100,19 @@ int main(int argc, char** argv) {
 			for (auto& p : style_facet_pairs) {
 				write_obj(p.first, p.second.begin(), p.second.end());
 			}
+
+			const std::list<item_info*>* all_infos;
+
+			if (settings.exact_segmentation) {
+				all_infos = &global_context_exact.all_item_infos();
+			} else {
+				all_infos = &global_context.all_item_infos();
+			}
+
+			external_element_collector(settings.output_filename + ".external", *all_infos);
+			for (auto& p : style_facet_pairs) {
+				write_obj(p.first, p.second.begin(), p.second.end());
+			}
 		}
 
 		auto T2 = timer::measure("difference_overlay");
