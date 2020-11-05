@@ -55,7 +55,8 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 
 	for (auto f : settings.file) {
 
-		ifcopenshell::geometry::Iterator context_iterator("cgal", settings.settings, f, filters, std::thread::hardware_concurrency());
+		auto ci = new ifcopenshell::geometry::Iterator("cgal", settings.settings, f, filters, std::thread::hardware_concurrency());
+		auto& context_iterator = *ci;
 
 		auto T = timer::measure("ifc_geometry_processing");
 		if (!context_iterator.initialize()) {
