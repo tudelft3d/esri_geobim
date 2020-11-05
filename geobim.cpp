@@ -95,24 +95,29 @@ int main(int argc, char** argv) {
 			for (auto& p : style_facet_pairs) {
 				write_city(p.first, p.second.begin(), p.second.end());
 			}
+			write_city.finalize();
 
 			simple_obj_writer write_obj(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
 			for (auto& p : style_facet_pairs) {
 				write_obj(p.first, p.second.begin(), p.second.end());
 			}
+			write_obj.finalize();
 
-			const std::list<item_info*>* all_infos;
+			std::list<item_info*> all_infos;
 
 			if (settings.exact_segmentation) {
-				all_infos = &global_context_exact.all_item_infos();
+				all_infos = global_context_exact.all_item_infos();
 			} else {
-				all_infos = &global_context.all_item_infos();
+				all_infos = global_context.all_item_infos();
 			}
 
-			external_element_collector(settings.output_filename + ".external", *all_infos);
+			all_infos.pop_front();
+
+			external_element_collector write_elem(settings.output_filename + ".external", all_infos);
 			for (auto& p : style_facet_pairs) {
-				write_obj(p.first, p.second.begin(), p.second.end());
+				write_elem(p.first, p.second.begin(), p.second.end());
 			}
+			write_elem.finalize();
 		}
 
 		auto T2 = timer::measure("difference_overlay");

@@ -31,6 +31,17 @@ struct abstract_writer {
 	std::array<Kernel_::Point_3, 3> points_from_facet(std::list<cgal_shape_t::Facet_handle>::iterator f) {
 		return points_from_facet(*f);
 	}
+
+	bool has_finalized = false;
+	virtual void do_finalize() = 0;
+	virtual ~abstract_writer() {
+	}
+	void finalize() {
+		if (!has_finalized) {
+			has_finalized = true;
+			do_finalize();
+		}
+	}
 };
 
 // OBJ writer for CGAL facets paired with a style
@@ -73,6 +84,8 @@ struct simple_obj_writer : public abstract_writer {
 			vertex_count += 3;
 		}
 	}
+
+	void do_finalize() {}
 };
 
 namespace {
@@ -174,7 +187,7 @@ struct city_json_writer : public abstract_writer {
 		}
 	}
 
-	void finalize() {
+	void do_finalize() {
 		json city;
 
 		city["type"] = "CityJSON";
@@ -199,10 +212,6 @@ struct city_json_writer : public abstract_writer {
 
 		std::ofstream(filename.c_str()) << city;
 	}
-
-	~city_json_writer() {
-		finalize();
-	}
 };
 
 struct external_element_collector : public abstract_writer {
@@ -214,9 +223,9 @@ struct external_element_collector : public abstract_writer {
 
 	json data;
 
-	external_element_collector(const std::string& fn_prefix, const std::list<item_info*>&)
+	external_element_collector(const std::string& fn_prefix, const std::list<item_info*>& infos)
 		: filename(fn_prefix + ".json")
-		, all_infos(all_infos)
+		, all_infos(infos)
 	{
 		data = json::array();
 	}
@@ -228,17 +237,13 @@ struct external_element_collector : public abstract_writer {
 		}
 	}
 
-	void finalize() {
+	void do_finalize() {
 		for (auto& info : all_infos) {
 			json object = json::object();
 			object["guid"] = info->guid;
 			object["is_external"] = part_of_exterior.find(info) != part_of_exterior.end();
 		}
 		std::ofstream(filename.c_str()) << data;
-	}
-
-	~external_element_collector() {
-		finalize();
 	}
 };
 
