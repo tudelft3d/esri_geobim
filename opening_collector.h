@@ -1,7 +1,11 @@
 #ifndef OPENING_COLLECTOR_H
 #define OPENING_COLLECTOR_H
 
-#include "processing.h"
+#include "context.h"
+
+#include <ifcparse/IfcFile.h>
+
+#include <map>
 
 // Collects openings in the file and maps them to their parent elements
 // for processing them after applying the Minkowski sum, as that performs

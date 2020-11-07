@@ -1,5 +1,4 @@
 #include <ifcconvert/validation_utils.h>
-#include <ifcgeom/schema_agnostic/IfcGeomIterator.h>
 
 #include "processing.h"
 #include "writer.h"
@@ -27,11 +26,17 @@ void debug_writer::operator()(shape_callback_item& item) {
 
 // Interprets IFC geometries by means of IfcOpenShell CGAL and
 // pass result to callback
-int process_geometries(geobim_settings & settings, const std::function<void(shape_callback_item&)>& fn) {
+process_geometries::process_geometries(geobim_settings& s)
+	: settings(s), all_openings(settings.file)
+{}
 
-	// @todo static now to prevent being gc'ed
-	static opening_collector all_openings(settings.file);
+process_geometries::~process_geometries() {
+	for (auto& x : iterators) {
+		delete x;
+	}
+}
 
+int process_geometries::operator()(const std::function<void(shape_callback_item&)>& fn) {
 	// Capture all openings beforehand, they are later assigned to the
 	// building elements.
 	auto opening_settings = settings;
@@ -39,7 +44,8 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 	opening_settings.entity_names->insert("IfcOpeningElement");
 	opening_settings.entity_names_included = true;
 	if (settings.apply_openings_posthoc && settings.entity_names != opening_settings.entity_names) {
-		process_geometries(opening_settings, std::ref(all_openings));
+		process_geometries p(opening_settings);
+		p(std::ref(all_openings));
 	}
 
 	std::vector<ifcopenshell::geometry::filter_t> filters;
@@ -56,6 +62,7 @@ int process_geometries(geobim_settings & settings, const std::function<void(shap
 	for (auto f : settings.file) {
 
 		auto ci = new ifcopenshell::geometry::Iterator("cgal", settings.settings, f, filters); // does not seem to help: , std::thread::hardware_concurrency());
+		iterators.push_back(ci);
 		auto& context_iterator = *ci;
 
 		auto T = timer::measure("ifc_geometry_processing");

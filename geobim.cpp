@@ -40,10 +40,13 @@ int main(int argc, char** argv) {
 	callback.contexts.push_back(new debug_writer);
 #endif
 
+	std::unique_ptr<process_geometries> p;
+
 	if (settings.radii.empty()) {
 		auto cec = new capturing_execution_context;
 		callback.contexts.push_back(cec);
-		process_geometries(settings, callback);
+		p = std::make_unique<process_geometries>(settings);
+		(*p)(std::ref(callback));
 		auto R = binary_search(cec->items.begin(), cec->items.end(), { 1.e-3, 0.2 });
 		std::cout << "Largest gap found with R ~ " << (R * 2.) << std::endl;
 	} else {
@@ -59,7 +62,8 @@ int main(int argc, char** argv) {
 			callback.contexts.push_back(&c);
 		}
 
-		process_geometries(settings, callback);
+		p = std::make_unique<process_geometries>(settings);
+		(*p)(std::ref(callback));
 
 		std::cout << "done processing geometries" << std::endl;
 
@@ -81,7 +85,11 @@ int main(int argc, char** argv) {
 			}
 
 			c.finalize();
+		}
 
+		p.reset();
+
+		for (auto& c : radius_contexts) {
 			auto T0 = timer::measure("semantic_segmentation");
 			global_execution_context<Kernel_>::segmentation_return_type style_facet_pairs;
 			if (settings.exact_segmentation) {

@@ -2,7 +2,9 @@
 #define PROCESSING_H
 
 #include "timer.h"
+#include "context.h"
 #include "settings.h"
+#include "opening_collector.h"
 
 #define ENSURE_2ND_OP_NARROWER
 
@@ -14,21 +16,9 @@
 
 #include <ifcgeom/kernels/cgal/CgalKernel.h>
 #include <ifcgeom/schema_agnostic/IfcGeomFilter.h>
+#include <ifcgeom/schema_agnostic/IfcGeomIterator.h>
 
 #include <string>
-
-// Generated for every representation *item* in the IFC file
-struct shape_callback_item {
-	IfcUtil::IfcBaseEntity* src;
-	std::string id, type, geom_reference;
-	cgal_placement_t transformation;
-	cgal_shape_t polyhedron;
-	const ifcopenshell::geometry::taxonomy::style* style;
-	boost::optional<Eigen::Vector3d> wall_direction;
-	std::list<shape_callback_item*> openings;
-
-	bool to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef);
-};
 
 // Light weight representation to be stored in global exec context
 struct rgb : public std::pair<double, std::pair<double, double>> {
@@ -54,11 +44,6 @@ struct item_info {
 	const std::string& entity_type;
 	std::string guid;
 	rgb* diffuse;
-};
-
-// Prototype of a context to which processed shapes will be fed
-struct execution_context {
-	virtual void operator()(shape_callback_item&) = 0;
 };
 
 struct debug_writer : public execution_context {
@@ -87,6 +72,14 @@ struct shape_callback {
 
 // Interprets IFC geometries by means of IfcOpenShell CGAL and
 // pass result to callback
-int process_geometries(geobim_settings& settings, const std::function <void(shape_callback_item&)>& fn);
+struct process_geometries {
+	geobim_settings settings;
+	opening_collector all_openings;
+	std::list<ifcopenshell::geometry::Iterator*> iterators;
+
+	process_geometries(geobim_settings&);
+	~process_geometries();
+	int operator()(const std::function<void(shape_callback_item&)>&);
+};
 
 #endif
