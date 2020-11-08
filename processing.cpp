@@ -116,6 +116,8 @@ int process_geometries::operator()(const std::function<void(shape_callback_item&
 				openings.push_back(it->second);
 			}
 
+			std::cout << openings.size() << " openings" << std::endl;
+
 			if (settings.apply_openings_posthoc && geom_object->product()->declaration().is("IfcWall")) {
 				auto T2 = timer::measure("wall_axis_handling");
 				auto item = geometry_mapper->map(geom_object->product());
