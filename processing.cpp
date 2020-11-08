@@ -67,7 +67,7 @@ int process_geometries::operator()(const std::function<void(shape_callback_item&
 
 		auto T = timer::measure("ifc_geometry_processing");
 		if (!context_iterator.initialize()) {
-			return 1;
+			continue;
 		}
 		T.stop();
 
