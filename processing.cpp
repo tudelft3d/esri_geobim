@@ -126,20 +126,30 @@ int process_geometries::operator()(const std::function<void(shape_callback_item&
 					typedef ifcopenshell::geometry::taxonomy::loop l;
 					typedef ifcopenshell::geometry::taxonomy::edge e;
 					typedef ifcopenshell::geometry::taxonomy::point3 p;
-					auto edge = (e*)((l*)((cl*)((cl*)item)->children[0])->children[0])->children[0];
-					if (edge->basis == nullptr && edge->start.which() == 0 && edge->end.which() == 0) {
-						const auto& p0 = boost::get<p>(edge->start);
-						const auto& p1 = boost::get<p>(edge->end);
-						Eigen::Vector4d P0 = p0.ccomponents().homogeneous();
-						Eigen::Vector4d P1 = p1.ccomponents().homogeneous();
-						auto V0 = n * P0;
-						auto V1 = n * P1;
-						std::cout << "Axis " << V0(0) << " " << V0(1) << " " << V0(2) << " -> "
-							<< V1(0) << " " << V1(1) << " " << V1(2) << std::endl;
-						wall_direction = (V1 - V0).head<3>().normalized();
+
+					if (item->kind() == ifcopenshell::geometry::taxonomy::COLLECTION &&
+						((cl*)item)->children.size() == 1 &&
+						((cl*)item)->children[0]->kind() == ifcopenshell::geometry::taxonomy::COLLECTION &&
+						((cl*)((cl*)item)->children[0])->children.size() == 1 &&
+						((cl*)((cl*)item)->children[0])->children[0]->kind() == ifcopenshell::geometry::taxonomy::LOOP &&
+						((l*)((cl*)((cl*)item)->children[0])->children[0])->children.size() == 1 &&
+						((l*)((cl*)((cl*)item)->children[0])->children[0])->children[0]->kind() == ifcopenshell::geometry::taxonomy::EDGE)
+					{
+						auto edge = (e*)((l*)((cl*)((cl*)item)->children[0])->children[0])->children[0];
+						if (edge->basis == nullptr && edge->start.which() == 0 && edge->end.which() == 0) {
+							const auto& p0 = boost::get<p>(edge->start);
+							const auto& p1 = boost::get<p>(edge->end);
+							Eigen::Vector4d P0 = p0.ccomponents().homogeneous();
+							Eigen::Vector4d P1 = p1.ccomponents().homogeneous();
+							auto V0 = n * P0;
+							auto V1 = n * P1;
+							std::cout << "Axis " << V0(0) << " " << V0(1) << " " << V0(2) << " -> "
+								<< V1(0) << " " << V1(1) << " " << V1(2) << std::endl;
+							wall_direction = (V1 - V0).head<3>().normalized();
+						}
 					}
-					T2.stop();
 				}
+				T2.stop();
 			}
 
 			for (auto& g : geom_object->geometry()) {
