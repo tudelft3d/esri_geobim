@@ -324,9 +324,8 @@ namespace {
 namespace {
 	// Return pair in map with largest value
 	template<typename T, typename U>
-	const std::pair<T, U>& map_max_value(const std::map<T, U>& x) {
-		using P = std::pair<T, U>;
-		return *std::max_element(x.begin(), x.end(), [](const P& p1, const P& p2) {
+	std::pair<T, U> map_max_value(const std::map<T, U>& x) {
+		return *std::max_element(x.begin(), x.end(), [](const std::pair<T, U>& p1, const std::pair<T, U>& p2) {
 			return p1.second < p2.second;
 		});
 	}
