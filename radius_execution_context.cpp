@@ -11,6 +11,8 @@
 #include <CGAL/Polygon_mesh_processing/bbox.h>
 
 #include <CGAL/boost/graph/convert_nef_polyhedron_to_polygon_mesh.h>
+#include <CGAL/Polygon_mesh_processing/connected_components.h>
+#include <boost/foreach.hpp>
 
 radius_execution_context::radius_execution_context(double r, bool narrower, bool minkowski_triangles, bool no_erosion)
 	: radius(r)
@@ -318,60 +320,76 @@ namespace {
 	}
 }
 
-// Extract the exterior component of a CGAL Polyhedron
 
+namespace {
+	// Return pair in map with largest value
+	template<typename T, typename U>
+	const std::pair<T, U>& map_max_value(const std::map<T, U>& x) {
+		using P = std::pair<T, U>;
+		return *std::max_element(x.begin(), x.end(), [](const P& p1, const P& p2) {
+			return p1.second < p2.second;
+		});
+	}
+}
+
+// Extract the exterior component of a CGAL Polyhedron
 void radius_execution_context::extract_in_place(cgal_shape_t& input, extract_component component) const {
 	if (input.facets_begin() == input.facets_end()) {
 		throw std::runtime_error("Empty input operand to extract()");
 	}
 
-	cgal_shape_t::Vertex_handle left_most_vertex;
+	// split_connected_components() is introduced in CGAL 5 :(
 
-	std::list<cgal_shape_t::Facet_handle> connected;
+	typedef boost::graph_traits<cgal_shape_t>::face_descriptor face_descriptor;
+	typedef boost::graph_traits<cgal_shape_t>::vertex_descriptor vertex_descriptor;
+	typedef boost::graph_traits<cgal_shape_t>::vertex_iterator vertex_iterator;
 
-	while (true) {
+	boost::property_map<cgal_shape_t, boost::face_external_index_t>::type fim
+		= get(boost::face_external_index, input);
 
-		Kernel_::FT max_x = -1e9;
-		for (auto it = input.edges_begin(); it != input.edges_end(); ++it) {
-			auto vx = it->vertex()->point().cartesian(0);
-			if (vx > max_x) {
-				max_x = vx;
-				left_most_vertex = it->vertex();
-			}
-		}
+	boost::vector_property_map<size_t,
+		boost::property_map<cgal_shape_t, boost::face_external_index_t>::type>
+		fsm(fim);
 
-		std::set<cgal_shape_t::Facet_handle> empty;
-		connected = connected_faces(left_most_vertex->halfedge()->facet(), empty);
+	auto ffim = CGAL::Polygon_mesh_processing::parameters::face_index_map(fim);
 
-		auto complete_bbox = CGAL::Polygon_mesh_processing::bbox(input);
-		CGAL::Bbox_3 component_bbox;
+	CGAL::Polygon_mesh_processing::connected_components(
+		input, 
+		fsm,
+		ffim);
 
-		for (auto& f : connected) {
-			component_bbox += CGAL::Polygon_mesh_processing::face_bbox(f, input);
-		}
+	face_descriptor largest_component_facet;
+	std::map<size_t, size_t> component_sizes;
+	std::map<size_t, double> component_areas;
 
-		if (bbox_diagonal(component_bbox) * 10. > bbox_diagonal(complete_bbox)) {
-			break;
-		} else {
-			// Cull away small components
-			input.erase_connected_component(left_most_vertex->halfedge());
+	BOOST_FOREACH(face_descriptor f, faces(input)) {
+		auto idx = fsm[f];
+		component_sizes[idx] ++;
+		component_areas[idx] += CGAL::to_double(CGAL::Polygon_mesh_processing::area(std::vector<face_descriptor>{f}, input));
+		if (component_sizes.rbegin()->first == idx) {
+			largest_component_facet = f;
 		}
 	}
 
-	if (component == EXTERIOR) {
-		std::set<cgal_shape_t::Facet_handle> outer_facets(connected.begin(), connected.end());
-
-		while (std::distance(input.facets_begin(), input.facets_end()) > outer_facets.size()) {
-			for (auto it = input.facets_begin(); it != input.facets_end(); ++it) {
-				if (outer_facets.find(&*it) == outer_facets.end()) {
-					input.erase_connected_component(it->halfedge());
-					break;
-				}
-			}
-		}
-	} else {
-		input.erase_connected_component(left_most_vertex->halfedge());
+	for (auto& p : component_sizes) {
+		std::cout << "component " << p.first << " has " << p.second << " and area " << component_areas[p.first] << std::endl;
 	}
+
+	typedef std::map<vertex_descriptor, std::size_t>   Internal_vertex_map;
+	typedef boost::associative_property_map<Internal_vertex_map>   Vertex_index_map;
+	Internal_vertex_map internal_vertex_index_map;
+	Vertex_index_map vertex_index_map(internal_vertex_index_map);
+	vertex_iterator vb, ve;
+	std::size_t counter = 0;
+	for (boost::tie(vb, ve) = vertices(input); vb != ve; ++vb, ++counter) {
+		put(vertex_index_map, *vb, counter);
+	}
+
+	CGAL::Polygon_mesh_processing::keep_connected_components(
+		input,
+		std::vector<size_t>{map_max_value(component_areas).first},
+		fsm,
+		CGAL::Polygon_mesh_processing::parameters::vertex_index_map(vertex_index_map));
 }
 
 cgal_shape_t radius_execution_context::extract(const cgal_shape_t& input, extract_component component) const {
