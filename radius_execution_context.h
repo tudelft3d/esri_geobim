@@ -49,7 +49,7 @@ struct radius_execution_context : public execution_context {
 	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > union_collector;
 	CGAL::Nef_polyhedron_3<Kernel_> padding_cube, padding_cube_2, boolean_result, exterior, bounding_box, complement, complement_padded;
 	cgal_shape_t polyhedron_exterior;
-	enum extract_component { INTERIOR, EXTERIOR };
+	enum extract_component { INTERIOR, EXTERIOR, LARGEST_AREA, SECOND_LARGEST_AREA };
 	bool minkowski_triangles_, no_erosion_, empty_;
 
 	radius_execution_context(double r, bool narrower = false, bool minkowski_triangles = false, bool no_erosion = false);

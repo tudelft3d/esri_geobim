@@ -37,6 +37,47 @@ radius_execution_context::radius_execution_context(double r, bool narrower, bool
 		padding_cube_2 = padding_cube;
 }
 
+namespace {
+	void minkowski_sum_triangles(const CGAL::Polyhedron_3<CGAL::Epick>& poly_triangulated, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
+
+		for (auto &face : faces(poly_triangulated)) {
+
+			if (!face->is_triangle()) {
+				std::cout << "Warning: non-triangular face!" << std::endl;
+				continue;
+			}
+
+			CGAL::Polyhedron_3<CGAL::Epick>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
+			CGAL::Point_3<CGAL::Epick> points[3];
+
+			int i = 0;
+			do {
+				points[i] = current_halfedge->vertex()->point();
+				++i;
+				++current_halfedge;
+			} while (current_halfedge != face->facet_begin());
+
+			double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<CGAL::Epick>(points[0], points[1], points[2]).squared_area()));
+			if (A < 1.e-5) {
+				std::cout << "Skipping triangle with area " << A << std::endl;
+				continue;
+			}
+
+			cgal_shape_t T;
+			CGAL::Cartesian_converter<CGAL::Epick, CGAL::Epeck> C;
+			T.make_triangle(C(points[0]), C(points[1]), C(points[2]));
+
+			CGAL::Nef_polyhedron_3<Kernel_> Tnef(T);
+
+			CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_cube);
+			accum.add_polyhedron(padded);
+		}
+
+		result = accum.get_union();
+	}
+}
+
 
 void radius_execution_context::operator()(shape_callback_item& item) {
 	if (item.src != previous_src) {
@@ -145,42 +186,7 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 			std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
 		}
 
-		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
-
-		for (auto &face : faces(poly_triangulated)) {
-
-			if (!face->is_triangle()) {
-				std::cout << "Warning: non-triangular face!" << std::endl;
-				continue;
-			}
-
-			CGAL::Polyhedron_3<CGAL::Epick>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
-			CGAL::Point_3<CGAL::Epick> points[3];
-
-			int i = 0;
-			do {
-				points[i] = current_halfedge->vertex()->point();
-				++i;
-				++current_halfedge;
-			} while (current_halfedge != face->facet_begin());
-
-			double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<CGAL::Epick>(points[0], points[1], points[2]).squared_area()));
-			if (A < 1.e-5) {
-				std::cout << "Skipping triangle with area " << A << std::endl;
-				continue;
-			}
-
-			cgal_shape_t T;
-			CGAL::Cartesian_converter<CGAL::Epick, CGAL::Epeck> C;
-			T.make_triangle(C(points[0]), C(points[1]), C(points[2]));
-
-			CGAL::Nef_polyhedron_3<Kernel_> Tnef(T);
-
-			CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_cube);
-			accum.add_polyhedron(padded);
-		}
-
-		result = accum.get_union();
+		minkowski_sum_triangles(poly_triangulated, padding_cube, result);
 		result.transform(item.transformation);
 
 		T2.stop();
@@ -329,6 +335,22 @@ namespace {
 			return p1.second < p2.second;
 		});
 	}
+
+	template<size_t N, typename T, typename U>
+	std::pair<T, U> nth_largest_value_from_map(const std::map<T, U>& x) {
+		std::vector<std::pair<U, T>> vec;
+		for (auto& y : x) {
+			vec.push_back({ y.second, y.first });
+		}
+		std::sort(vec.begin(), vec.end());
+		std::reverse(vec.begin(), vec.end());
+		if (N > vec.size()) {
+			throw std::runtime_error("not enough components");
+		}
+		auto it = vec.begin() + N;
+		return { it->second, it->first };
+	}
+
 }
 
 // Extract the exterior component of a CGAL Polyhedron
@@ -384,9 +406,17 @@ void radius_execution_context::extract_in_place(cgal_shape_t& input, extract_com
 		put(vertex_index_map, *vb, counter);
 	}
 
+	std::vector<size_t> components_to_keep;
+
+	if (component == LARGEST_AREA) {
+		components_to_keep.push_back(map_max_value(component_areas).first);
+	} else if (component == SECOND_LARGEST_AREA) {
+		components_to_keep.push_back(nth_largest_value_from_map<1>(component_areas).first);
+	}
+
 	CGAL::Polygon_mesh_processing::keep_connected_components(
 		input,
-		std::vector<size_t>{map_max_value(component_areas).first},
+		components_to_keep,
 		fsm,
 		CGAL::Polygon_mesh_processing::parameters::vertex_index_map(vertex_index_map));
 }
@@ -440,12 +470,14 @@ void radius_execution_context::finalize() {
 		}
 
 		// @todo Wasteful: remove interior on Nef?
-		extract_in_place(polyhedron_exterior, EXTERIOR);
+		extract_in_place(polyhedron_exterior, LARGEST_AREA);
 
 		{
 			simple_obj_writer tmp_debug("debug-exterior");
 			tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
 		}
+
+#if 0
 
 		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
 		bounding_box = create_bounding_box(polyhedron_exterior);
@@ -479,17 +511,38 @@ void radius_execution_context::finalize() {
 
 		exterior.extract_regularization();
 
+		if (exterior.is_simple()) {
+			auto T1 = timer::measure("result_nef_to_poly");
+			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
+			T1.stop();
+
+			auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
+			std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
+		} else {
+			CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
+			std::cout << "Result with radius " << radius << " is not manifold" << std::endl;
+		}
+
+#else
+
+		CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
+		util::copy::polyhedron(poly_triangulated, polyhedron_exterior);
+		if (!CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated)) {
+			std::cerr << "unable to triangulate all faces" << std::endl;
+			return;
+		}
+		minkowski_sum_triangles(poly_triangulated, padding_cube, exterior);
+		if (exterior.is_simple()) {
+			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
+		} else {
+			CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
+		}
+
+		extract_in_place(polyhedron_exterior, SECOND_LARGEST_AREA);
+#endif
+
 	}
 
-	if (exterior.is_simple()) {
-		auto T1 = timer::measure("result_nef_to_poly");
-		polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
-		T1.stop();
-
-		auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
-		std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
-	} else {
-		CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
-		std::cout << "Result with radius " << radius << " is not manifold" << std::endl;
-	}
+	std::cout << "exterior poly num facets: " << polyhedron_exterior.size_of_facets() << std::endl;
 }
+
