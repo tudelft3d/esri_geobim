@@ -37,12 +37,63 @@ radius_execution_context::radius_execution_context(double r, bool narrower, bool
 		padding_cube_2 = padding_cube;
 }
 
+#ifdef _MSC_VER
+#include "windows.h"
+#include "psapi.h"
+void print_mem_usage() {
+	PROCESS_MEMORY_COUNTERS_EX pmc;
+	GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
+	std::cout << "memory: " << pmc.PrivateUsage << std::endl;
+}
+#else
+void print_mem_usage() {}
+#endif
+
+
 namespace {
+	template <size_t N, typename T>
+	class queue_shortener {
+		T t;
+		size_t x;
+
+	public:
+		queue_shortener() : x(0) {}
+
+		void add_polyhedron(const CGAL::Nef_polyhedron_3<Kernel_>& u) {
+			t.add_polyhedron(u);
+			++x;
+// does not seem to reduce memory footprint
+#if 0
+			
+			if (x == N) {
+				std::cout << "before" << std::endl;
+				print_mem_usage();
+				auto v = t.get_union();
+				v.extract_regularization();
+				t = T();
+				t.add_polyhedron(v);
+				x = 0;
+				std::cout << "after" << std::endl;
+				print_mem_usage();
+			}
+#endif
+		}
+
+		CGAL::Nef_polyhedron_3<Kernel_> get_union() {
+			return t.get_union();
+		}
+	};
+
+
 	void minkowski_sum_triangles(const CGAL::Polyhedron_3<CGAL::Epick>& poly_triangulated, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
-		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
+		queue_shortener<30, CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > > accum;
 
-		for (auto &face : faces(poly_triangulated)) {
+		size_t num = poly_triangulated.size_of_facets();
 
+		std::cout << "\n";
+
+		for (auto face = poly_triangulated.facets_begin(); face != poly_triangulated.facets_end(); ++face) {
+		
 			if (!face->is_triangle()) {
 				std::cout << "Warning: non-triangular face!" << std::endl;
 				continue;
@@ -72,7 +123,15 @@ namespace {
 
 			CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_cube);
 			accum.add_polyhedron(padded);
+
+			auto n = std::distance(poly_triangulated.facets_begin(), face);
+			if (n % 100) {
+				std::cout << "\r" << (n * 100 / num) << "%";
+				std::cout.flush();
+			}
 		}
+
+		std::cout << "\n";
 
 		result = accum.get_union();
 	}
