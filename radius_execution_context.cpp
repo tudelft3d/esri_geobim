@@ -59,7 +59,7 @@ namespace {
 			} while (current_halfedge != face->facet_begin());
 
 			double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<CGAL::Epick>(points[0], points[1], points[2]).squared_area()));
-			if (A < 1.e-5) {
+			if (A < (1.e-5 * 1.e-5 * 0.5)) {
 				std::cout << "Skipping triangle with area " << A << std::endl;
 				continue;
 			}
