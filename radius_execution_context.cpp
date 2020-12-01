@@ -92,7 +92,7 @@ namespace {
 	};
 
 	template <typename Kernel>
-	void minkowski_sum_triangles__(std::vector<std::array<CGAL::Point_3<Kernel>, 3>>& triangles, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+	void minkowski_sum_triangles_array_impl(std::vector<std::array<CGAL::Point_3<Kernel>, 3>>& triangles, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 		// queue_shortener<30, CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > > accum;
 		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
 		for (auto& points : triangles) {
@@ -114,18 +114,18 @@ namespace {
 	}
 
 	template <typename Poly>
-	void minkowski_sum_triangles_(typename Poly::Facet_const_iterator begin, typename Poly::Facet_const_iterator end, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+	void minkowski_sum_triangles_single_threaded(typename Poly::Facet_const_iterator begin, typename Poly::Facet_const_iterator end, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 		// queue_shortener<30, CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > > accum;
 		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
 
 		size_t num = std::distance(begin, end);
 
-		// std::cout << "\n";
+		std::cout << "\n";
 
 		for (auto face = begin; face != end; ++face) {
 
 			if (!face->is_triangle()) {
-				// std::cout << "Warning: non-triangular face!" << std::endl;
+				std::cout << "Warning: non-triangular face!" << std::endl;
 				continue;
 			}
 
@@ -141,7 +141,7 @@ namespace {
 
 			double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<typename Poly::Traits::Kernel>(points[0], points[1], points[2]).squared_area()));
 			if (A < (1.e-5 * 1.e-5 * 0.5)) {
-				// std::cout << "Skipping triangle with area " << A << std::endl;
+				std::cout << "Skipping triangle with area " << A << std::endl;
 				continue;
 			}
 
@@ -156,17 +156,17 @@ namespace {
 
 			auto n = std::distance(begin, face);
 			if (n % 100) {
-				// std::cout << "\r" << (n * 100 / num) << "%";
-				// std::cout.flush();
+				std::cout << "\r" << (n * 100 / num) << "%";
+				std::cout.flush();
 			}
 		}
 
-		// std::cout << "\n";
+		std::cout << "\n";
 
 		result = accum.get_union();
 	}
 	
-	void minkowski_sum_triangles(const CGAL::Polyhedron_3<CGAL::Epick>& poly_triangulated_epick, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+	void minkowski_sum_triangles_double_multithreaded(const CGAL::Polyhedron_3<CGAL::Epick>& poly_triangulated_epick, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 		// We need to copy to non-filtered kernel for multi threading
 		// We're using double so that we can sneak in SMS, it would fail otherwise on missing sqrt()
 		typedef CGAL::Simple_cartesian<double> TriangleKernel;
@@ -222,7 +222,6 @@ namespace {
 					CGAL::Gmpq pz = p.cartesian(2).mpq();
 					*/
 					
-					
 					double px = p.cartesian(0);
 					double py = p.cartesian(1);
 					double pz = p.cartesian(2);
@@ -235,14 +234,12 @@ namespace {
 			
 			std::future<void> fu = std::async(
 				std::launch::async, 
-				minkowski_sum_triangles__<TriangleKernel>, 
+				minkowski_sum_triangles_array_impl<TriangleKernel>,
 				std::ref(triangles[i]), 
 				std::ref(cubes[i]), 
 				std::ref(results[i])
 			);
-			// std::future<void> fu = std::async(std::launch::async, minkowski_sum_triangles_<CGAL::Polyhedron_3<TriangleKernel>>, begin, end, cubes[i], results[i]);
 			threadpool.emplace_back(std::move(fu));
-			// minkowski_sum_triangles_(begin, end, cubes[i], results[i]);
 			end = begin;
 		}
 
@@ -256,11 +253,8 @@ namespace {
 		}
 
 		result = thread_join.get_union();
-
-		// return minkowski_sum_triangles_(poly_triangulated.facets_begin(), poly_triangulated.facets_end(), padding_cube, result);
 	}
 }
-
 
 void radius_execution_context::operator()(shape_callback_item& item) {
 	if (item.src != previous_src) {
@@ -294,9 +288,13 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	last_place = item.transformation;
 
 	CGAL::Nef_polyhedron_3<Kernel_> item_nef, result;
-	bool item_nef_succeeded;
-	if (!(item_nef_succeeded = item.to_nef_polyhedron(item_nef))) {
-		std::cerr << "no nef for product" << std::endl;
+	bool item_nef_succeeded = false;
+	if (self_intersections.empty()) {
+		if (!(item_nef_succeeded = item.to_nef_polyhedron(item_nef))) {
+			std::cerr << "no nef for product" << std::endl;
+		}
+	} else {
+		std::cerr << "self intersections, not trying to convert to Nef" << std::endl;
 	}
 
 	bool result_set = false;
@@ -369,7 +367,11 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 			std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
 		}
 
-		minkowski_sum_triangles(poly_triangulated, padding_cube, result);
+		minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
+			poly_triangulated.facets_begin(), 
+			poly_triangulated.facets_end(), 
+			padding_cube, result
+		);
 		result.transform(item.transformation);
 
 		T2.stop();
@@ -714,7 +716,11 @@ void radius_execution_context::finalize() {
 			std::cerr << "unable to triangulate all faces" << std::endl;
 			return;
 		}
-		minkowski_sum_triangles(poly_triangulated, padding_cube, exterior);
+		minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
+			poly_triangulated.facets_begin(),
+			poly_triangulated.facets_end(),
+			padding_cube, exterior
+		);
 		if (exterior.is_simple()) {
 			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
 		} else {
