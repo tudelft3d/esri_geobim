@@ -10,8 +10,39 @@
 #include <array>
 #include <fstream>
 
+template <typename P>
+struct vertex_cache {
+	std::map<P, size_t> vertex_indices;
+	std::vector<P> vertex_points;
+};
+
+struct print_and_clear_point_cache {
+	std::ostream& obj_;
+
+	print_and_clear_point_cache(std::ostream& obj)
+	: obj_(obj) 
+	{}
+
+	void operator()(boost::blank&) {}
+	
+	template <typename T>
+	void operator()(T& c) {
+		for (auto& p : c.vertex_points) {
+			obj_ << "v "
+				<< p.cartesian(0) << " "
+				<< p.cartesian(1) << " "
+				<< p.cartesian(2) << "\n";
+		}
+		c.vertex_points.clear();
+	}
+};
+
 // Abstract writer class that takes triangular facets.
 struct abstract_writer {
+	typedef CGAL::Simple_cartesian<double>::Point_3 P3;
+
+	boost::variant<boost::blank, vertex_cache<cgal_point_t>, vertex_cache<P3>> cache;
+
 	std::array<Kernel_::Point_3, 3> points_from_facet(cgal_shape_t::Facet_handle f) {
 		return {
 				f->facet_begin()->vertex()->point(),
@@ -20,12 +51,35 @@ struct abstract_writer {
 		};
 	}
 
-	std::array<CGAL::Simple_cartesian<double>::Point_3, 3> points_from_facet(CGAL::Polyhedron_3<CGAL::Simple_cartesian<double>>::Facet_handle f) {
+	std::array<P3, 3> points_from_facet(CGAL::Polyhedron_3<CGAL::Simple_cartesian<double>>::Facet_handle f) {
 		return {
 				f->facet_begin()->vertex()->point(),
 				f->facet_begin()->next()->vertex()->point(),
 				f->facet_begin()->next()->next()->vertex()->point()
 		};
+	}
+
+	template <typename T>
+	std::array<size_t, 3> point_indices_from_facet(T t) {
+		auto arr = points_from_facet(t);
+		typedef typename decltype(arr)::value_type U;
+		if (cache.which() == 0) {
+			cache = vertex_cache<U>();
+		}
+		auto& C = boost::get<vertex_cache<U>>(cache);
+		std::array<size_t, 3> idxs;
+		for (int i = 0; i < 3; ++i) {
+			auto it = C.vertex_indices.find(arr[i]);
+			if (it == C.vertex_indices.end()) {
+				auto n = C.vertex_indices.size();
+				idxs[i] = C.vertex_indices[arr[i]] = n;
+				C.vertex_points.push_back(arr[i]);
+			}
+			else {
+				idxs[i] = it->second;
+			}
+		}
+		return idxs;
 	}
 
 	std::array<Kernel_::Point_3, 3> points_from_facet(std::list<cgal_shape_t::Facet_handle>::iterator f) {
@@ -58,6 +112,7 @@ struct simple_obj_writer : public abstract_writer {
 		obj << "mtllib " << fn_prefix << ".mtl\n";
 	}
 
+	// @todo make the Kernel or Point_3 type discoverable from this template
 	template <typename It>
 	void operator()(const item_info* info, It begin, It end) {
 		const auto& diffuse = info && info->diffuse ? *info->diffuse : GRAY;
@@ -69,6 +124,7 @@ struct simple_obj_writer : public abstract_writer {
 
 		group_id++;
 
+		/*
 		for (auto it = begin; it != end; ++it) {
 			auto points = points_from_facet(it);
 			for (int i = 0; i < 3; ++i) {
@@ -82,6 +138,21 @@ struct simple_obj_writer : public abstract_writer {
 				<< (vertex_count + 1) << " "
 				<< (vertex_count + 2) << "\n";
 			vertex_count += 3;
+		}
+		*/
+
+		std::vector<std::array<size_t, 3>> fs;
+		for (auto it = begin; it != end; ++it) {
+			fs.push_back(point_indices_from_facet(it));
+		}
+
+		boost::apply_visitor(print_and_clear_point_cache(obj), cache);		
+
+		for (auto& f : fs) {
+			obj << "f "
+				<< f[0] + 1 << " "
+				<< f[1] + 1 << " "
+				<< f[2] + 1 << "\n";
 		}
 	}
 

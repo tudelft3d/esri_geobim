@@ -47,14 +47,18 @@ int main(int argc, char** argv) {
 		callback.contexts.push_back(cec);
 		p = std::make_unique<process_geometries>(settings);
 		(*p)(std::ref(callback));
-		auto R = binary_search(cec->items.begin(), cec->items.end(), { 1.e-3, 0.2 });
-		std::cout << "Largest gap found with R ~ " << (R * 2.) << std::endl;
+		auto R = binary_search(cec->items.begin(), cec->items.end(), { "0.001", "0.2" });
+		std::cout << "Largest gap found with R / 2 ~ " << R << std::endl;
 	} else {
 		std::vector<radius_execution_context> radius_contexts;
 		bool first = true;
-		for (double r : settings.radii) {
+		for (auto& r : settings.radii) {
 			// 2nd is narrower (depending on ifdef above, appears to be necessary).
-			radius_contexts.emplace_back(r, !first, settings.minkowski_triangles, settings.no_erosion);
+			radius_contexts.emplace_back(r, radius_settings()
+				.set(radius_settings::NARROWER, !first)
+				.set(radius_settings::MINKOWSKI_TRIANGLES, settings.minkowski_triangles)
+				.set(radius_settings::NO_EROSION, settings.no_erosion)
+				.set(radius_settings::SPHERE, settings.spherical_padding));
 			first = false;
 		}
 

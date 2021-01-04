@@ -14,6 +14,7 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 		("help,h", "display usage information")
 		("version,v", "display version information")
 		("debug,d", "more verbose log messages")
+		("spherical-padding,s", "use spherical padding volume")
 		("openings,o", "whether to process opening subtractions")
 		("timings,t", "print timings after execution")
 		("no-erosion,n", "don't apply erosion after union")
@@ -58,13 +59,10 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 
 	// using Kernel_::FT creates weird segfaults, probably due to how ifopsh constructs the box, coordinates components cannot be shared?
 	if (vmap.count("radii")) {
-		std::vector<std::string> tokens;
-		boost::split(tokens, vmap["radii"].as<std::string>(), boost::is_any_of(";"));
-		std::transform(tokens.begin(), tokens.end(), std::back_inserter(settings.radii), [](const std::string& s) {
-			// radii.push_back(CGAL::Gmpq(argv[i]));
-			return boost::lexical_cast<double>(s);
+		boost::split(settings.radii, vmap["radii"].as<std::string>(), boost::is_any_of(";"));
+		std::sort(settings.radii.begin(), settings.radii.end(), [](const std::string& s, const std::string& t) {
+			return boost::lexical_cast<double>(s) < boost::lexical_cast<double>(t);
 		});
-		std::sort(settings.radii.begin(), settings.radii.end());
 	}
 
 	if (settings.radii.empty()) {
@@ -77,6 +75,7 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 	settings.exact_segmentation = vmap.count("exact-segmentation");
 	settings.debug = vmap.count("debug");
 	settings.minkowski_triangles = vmap.count("minkowski-triangles");
+	settings.spherical_padding = vmap.count("spherical-padding");
 
 	std::transform(settings.input_filenames.begin(), settings.input_filenames.end(), std::back_inserter(settings.file), [](const std::string& s) {
 		IfcParse::IfcFile* f = new IfcParse::IfcFile(s);

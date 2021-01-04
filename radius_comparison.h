@@ -32,8 +32,8 @@ struct radius_comparison {
 };
 
 template <typename It>
-double initialize_radius_context_and_get_volume_with_cache(It first, It second, double radius) {
-	static std::map<double, double> cache_;
+double initialize_radius_context_and_get_volume_with_cache(It first, It second, const std::string& radius) {
+	static std::map<std::string, double> cache_;
 
 	auto it = cache_.find(radius);
 	if (it != cache_.end()) {
@@ -41,7 +41,7 @@ double initialize_radius_context_and_get_volume_with_cache(It first, It second, 
 		return it->second;
 	}
 
-	radius_execution_context rec(radius, false);
+	radius_execution_context rec(radius);
 	// Unfortunately for_each() is by value so needs to be wrapped in a lambda with side effects
 	std::for_each(first, second, [&rec](auto& v) {
 		rec(v);
@@ -56,8 +56,8 @@ double initialize_radius_context_and_get_volume_with_cache(It first, It second, 
 }
 
 template <typename It>
-double binary_search(It first, It second, std::pair<double, double> range) {
-	double abc[3];
+std::string binary_search(It first, It second, std::pair<std::string, std::string> range) {
+	std::string abc[3];
 	std::tie(abc[0], abc[2]) = range;
 
 	std::cout << "Testing " << abc[0] << " and " << abc[2] << std::endl;
@@ -66,12 +66,17 @@ double binary_search(It first, It second, std::pair<double, double> range) {
 	auto b_vol = initialize_radius_context_and_get_volume_with_cache(first, second, abc[2]);
 
 	if (a_vol * 1.1 < b_vol) {
-		if ((abc[2] - abc[0]) < 1.e-4) {
+		double a = boost::lexical_cast<double>(abc[0]);
+		double c = boost::lexical_cast<double>(abc[2]);
+		auto b = (a + c) / 2.;
+
+		abc[1] = boost::lexical_cast<std::string>(b);
+
+		if ((c - a) < 1.e-4) {
 			std::cout << "Terminating search at " << abc[0] << " and " << abc[2] << std::endl;
-			return (abc[0] + abc[2]) / 2.;
+			return boost::lexical_cast<std::string>((a + c) / 2.);
 		}
 
-		abc[1] = (abc[0] + abc[2]) / 2.;
 		for (int i = 1; i >= 0; --i) {
 			auto r = binary_search(first, second, { abc[i], abc[i + 1] });
 			if (r != abc[i + 1]) {

@@ -6,14 +6,6 @@
 #include "settings.h"
 #include "opening_collector.h"
 
-#define ENSURE_2ND_OP_NARROWER
-
-#ifdef ENSURE_2ND_OP_NARROWER
-#define MAKE_OP2_NARROWER -2e-7
-#else
-#define MAKE_OP2_NARROWER
-#endif
-
 #include <ifcgeom/kernels/cgal/CgalKernel.h>
 #include <ifcgeom/schema_agnostic/IfcGeomFilter.h>
 #include <ifcgeom/schema_agnostic/IfcGeomIterator.h>

@@ -43,16 +43,33 @@ public:
 	}
 };
 
+#include <bitset>
+
+struct radius_settings : std::bitset<4> {
+	enum V {
+		NARROWER, MINKOWSKI_TRIANGLES, NO_EROSION, SPHERE
+	};
+	radius_settings& set(V v, bool b) {
+		(*this)[(int) v] = b;
+		return *this;
+	}
+	bool get(V v) const {
+		return (*this)[(int) v];
+	}
+};
+
 // State (polyhedra mostly) that are relevant only for one radius
 struct radius_execution_context : public execution_context {
-	double radius;
+	radius_settings settings_;
+	std::string radius_str;
+	double radius, ico_edge_length;
 	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > union_collector;
-	CGAL::Nef_polyhedron_3<Kernel_> padding_cube, padding_cube_2, boolean_result, exterior, bounding_box, complement, complement_padded;
+	CGAL::Nef_polyhedron_3<Kernel_> padding_volume, padding_volume_2, boolean_result, exterior, bounding_box, complement, complement_padded;
 	cgal_shape_t polyhedron_exterior;
 	enum extract_component { INTERIOR, EXTERIOR, LARGEST_AREA, SECOND_LARGEST_AREA };
 	bool minkowski_triangles_, no_erosion_, empty_;
 
-	radius_execution_context(double r, bool narrower = false, bool minkowski_triangles = false, bool no_erosion = false);
+	radius_execution_context(const std::string& radius, radius_settings=radius_settings());
 
 	IfcUtil::IfcBaseEntity* previous_src = nullptr;
 	std::string previous_geom_ref;

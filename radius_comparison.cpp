@@ -23,9 +23,10 @@ radius_comparison::hollow_solid::hollow_solid(radius_execution_context & a, doub
 	hollow.extract_regularization();
 }
 
+#define MAKE_OP2_NARROWER -2e-7
+
 radius_comparison::radius_comparison(radius_execution_context & a, radius_execution_context & b, double d)
-//	: A(a, d), B(b, boost::math::float_advance(d, -10))
-	: A(a, d), B(b, d MAKE_OP2_NARROWER) {
+	: A(a, d), B(b, d + MAKE_OP2_NARROWER) {
 	difference_nef = B.hollow - A.hollow;
 	difference_nef.extract_regularization();
 	difference_poly = ifcopenshell::geometry::utils::create_polyhedron(difference_nef);

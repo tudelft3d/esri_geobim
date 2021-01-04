@@ -1,3 +1,5 @@
+// #define CGAL_SURFACE_SIMPLIFICATION_ENABLE_TRACE
+
 #include "radius_execution_context.h"
 #include "writer.h"
 
@@ -9,32 +11,178 @@
 #include <CGAL/Polygon_mesh_processing/measure.h>
 #include <CGAL/Polygon_mesh_processing/self_intersections.h>
 #include <CGAL/Polygon_mesh_processing/bbox.h>
+#include <CGAL/Polygon_mesh_processing/polygon_mesh_to_polygon_soup.h>
 
 #include <CGAL/boost/graph/convert_nef_polyhedron_to_polygon_mesh.h>
 #include <CGAL/Polygon_mesh_processing/connected_components.h>
 #include <boost/foreach.hpp>
 
-radius_execution_context::radius_execution_context(double r, bool narrower, bool minkowski_triangles, bool no_erosion)
-	: radius(r)
-	, minkowski_triangles_(minkowski_triangles) 
-	, no_erosion_(no_erosion)
+#include <CGAL/boost/graph/helpers.h>
+
+#include <CGAL/Point_set_3.h>
+#include <CGAL/cluster_point_set.h>
+#include <CGAL/compute_average_spacing.h>
+
+static bool ENSURE_2ND_OP_NARROWER = true;
+static double MAKE_OP2_NARROWER = ENSURE_2ND_OP_NARROWER ? -2e-7 : 0.0;
+
+namespace {
+	template <typename K>
+	struct average_point {
+		CGAL::Vector_3<K> accum;
+		size_t n = 0;
+
+		void add(const CGAL::Point_3<K>& p) {
+			accum += p - CGAL::ORIGIN;
+			n += 1;
+		}
+
+		operator CGAL::Point_3<K>() const {
+			return CGAL::ORIGIN + accum / n;
+		}
+	};
+
+	template <typename T>
+	void cluster_vertices(T& s, double r) {
+		typedef typename T::Traits::Kernel K;
+		typedef CGAL::Point_3<K> P;
+
+		std::vector<P> points;
+		std::vector<std::vector<size_t>> indices;
+		CGAL::Polygon_mesh_processing::polygon_mesh_to_polygon_soup(s, points, indices);
+
+		std::map<P, size_t> clusters;
+		boost::associative_property_map<std::map<P, size_t>> clusters_map(clusters);
+
+		int n = CGAL::cluster_point_set(points, clusters_map, CGAL::parameters::neighbor_radius(r));
+		std::cout << n << " clusters" << std::endl;
+
+		std::vector<average_point<K>> new_points_accum(clusters.size());
+		for (auto& p : clusters) {
+			new_points_accum[p.second].add(p.first);
+		}
+
+		std::vector<P> new_points;
+		for (auto& p : new_points_accum) {
+			new_points.push_back(p);
+		}
+
+		std::vector<std::vector<size_t>> new_indices;
+
+		for (auto& x : indices) {
+			std::vector<size_t> transformed;
+			std::transform(x.begin(), x.end(), std::back_inserter(transformed), [&clusters, &points](size_t i) {
+				return clusters.find(points[i])->second;
+			});
+			std::set<size_t> transformed_unique(transformed.begin(), transformed.end());
+			if (transformed_unique.size() == transformed.size()) {
+				new_indices.push_back(transformed);
+			}
+		}
+
+		T new_poly;
+		CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(new_points, new_indices, new_poly);
+
+		s = new_poly;
+	}
+}
+
+radius_execution_context::radius_execution_context(const std::string& r, radius_settings rs)
+	: settings_(rs)
+	, radius_str(r)
+	, radius(boost::lexical_cast<double>(r))
+	, minkowski_triangles_(rs.get(radius_settings::MINKOWSKI_TRIANGLES))
+	, no_erosion_(rs.get(radius_settings::NO_EROSION))
 	, empty_(true)
 {
 	{
-		auto polycube = ifcopenshell::geometry::utils::create_cube(r);
-		padding_cube = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+		if (rs.get(radius_settings::SPHERE)) {
+			cgal_shape_t ico;
+			
+			CGAL::make_icosahedron(ico, cgal_point_t(0, 0, 0), 1.0);
+
+			double ml = std::numeric_limits<double>::infinity();
+			
+			// Take the edge centers and find minimal distance from origin.
+			// Or use vertex position
+			for (auto& e : edges(ico)) {
+				auto v1 = e.halfedge()->vertex();
+				auto v2 = e.opposite().halfedge()->vertex();
+
+				double v1x = CGAL::to_double(v1->point().cartesian(0));
+				double v1y = CGAL::to_double(v1->point().cartesian(1));
+				double v1z = CGAL::to_double(v1->point().cartesian(2));
+
+				double v2x = CGAL::to_double(v2->point().cartesian(0));
+				double v2y = CGAL::to_double(v2->point().cartesian(1));
+				double v2z = CGAL::to_double(v2->point().cartesian(2));
+
+#ifdef ICO_EDGE_CENTRES
+				double vx = (v1x + v2x) / 2.;
+				double vy = (v1y + v2y) / 2.;
+				double vz = (v1z + v2z) / 2.;
+
+				double l = std::sqrt(vx*vx + vy * vy + vz * vz);
+				if (l < ml) {
+					ml = l;
+				}
+#else
+				double l = std::sqrt(v1x*v1x + v1y * v1y + v1z * v1z);
+				if (l < ml) {
+					ml = l;
+				}
+				l = std::sqrt(v2x*v2x + v2y * v2y + v2z * v2z);
+				if (l < ml) {
+					ml = l;
+				}
+#endif
+			}
+
+			// Divide the coordinates with the miminal distance
+			for (auto& v : vertices(ico)) {
+				v->point() = CGAL::ORIGIN + ((v->point() - CGAL::ORIGIN) * (radius / ml));
+			}
+
+			ico_edge_length = 10.;
+			// Now compute ico edge length, we use it later as a treshold for simplification
+			for (auto& e : edges(ico)) {
+				auto v1 = e.halfedge()->vertex();
+				auto v2 = e.opposite().halfedge()->vertex();
+
+				double v1x = CGAL::to_double(v1->point().cartesian(0));
+				double v1y = CGAL::to_double(v1->point().cartesian(1));
+				double v1z = CGAL::to_double(v1->point().cartesian(2));
+
+				double v2x = CGAL::to_double(v2->point().cartesian(0));
+				double v2y = CGAL::to_double(v2->point().cartesian(1));
+				double v2z = CGAL::to_double(v2->point().cartesian(2));
+
+				double vx = (v1x - v2x);
+				double vy = (v1y - v2y);
+				double vz = (v1z - v2z);
+
+				double l = std::sqrt(vx*vx + vy * vy + vz * vz);
+				if (l < ico_edge_length) {
+					ico_edge_length = l;
+				}
+			}
+
+			padding_volume = ifcopenshell::geometry::utils::create_nef_polyhedron(ico);
+		}
+		else {
+			auto polycube = ifcopenshell::geometry::utils::create_cube(radius);
+			padding_volume = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+		}
 	}
 
-#ifdef ENSURE_2ND_OP_NARROWER
-	if (narrower) {
+	if (ENSURE_2ND_OP_NARROWER && rs.get(radius_settings::NARROWER)) {
 		// double r2 = boost::math::float_advance(r, +5);
-		double r2 = r + 1e-7;
-		std::cout << r << " -> " << r2 << std::endl;
+		double r2 = radius + 1e-7;
 		auto polycube = ifcopenshell::geometry::utils::create_cube(r2);
-		padding_cube_2 = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
-	} else // -> ...
-#endif
-		padding_cube_2 = padding_cube;
+		padding_volume_2 = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+	} else {
+		padding_volume_2 = padding_volume;
+	}
 }
 
 #include <thread>
@@ -42,6 +190,8 @@ radius_execution_context::radius_execution_context(double r, bool narrower, bool
 #include <CGAL/Surface_mesh_simplification/edge_collapse.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_length_stop_predicate.h>
 #include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Edge_length_cost.h>
+#include <CGAL/Surface_mesh_simplification/Policies/Edge_collapse/Midpoint_placement.h>
+
 namespace SMS = CGAL::Surface_mesh_simplification;
 
 #ifdef _MSC_VER
@@ -92,7 +242,7 @@ namespace {
 	};
 
 	template <typename Kernel>
-	void minkowski_sum_triangles_array_impl(std::vector<std::array<CGAL::Point_3<Kernel>, 3>>& triangles, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+	void minkowski_sum_triangles_array_impl(std::vector<std::array<CGAL::Point_3<Kernel>, 3>>& triangles, CGAL::Nef_polyhedron_3<Kernel_>& padding_volume, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 		// queue_shortener<30, CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > > accum;
 		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
 		for (auto& points : triangles) {
@@ -107,14 +257,14 @@ namespace {
 
 			CGAL::Nef_polyhedron_3<Kernel_> Tnef(T);
 
-			CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_cube);
+			CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_volume);
 			accum.add_polyhedron(padded);
 		}
 		result = accum.get_union();
 	}
 
 	template <typename Poly>
-	void minkowski_sum_triangles_single_threaded(typename Poly::Facet_const_iterator begin, typename Poly::Facet_const_iterator end, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+	void minkowski_sum_triangles_single_threaded(typename Poly::Facet_const_iterator begin, typename Poly::Facet_const_iterator end, CGAL::Nef_polyhedron_3<Kernel_>& padding_volume, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 		// queue_shortener<30, CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > > accum;
 		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > accum;
 
@@ -151,7 +301,7 @@ namespace {
 
 			CGAL::Nef_polyhedron_3<Kernel_> Tnef(T);
 
-			CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_cube);
+			CGAL::Nef_polyhedron_3<Kernel_> padded = CGAL::minkowski_sum_3(Tnef, padding_volume);
 			accum.add_polyhedron(padded);
 
 			auto n = std::distance(begin, face);
@@ -166,7 +316,7 @@ namespace {
 		result = accum.get_union();
 	}
 	
-	void minkowski_sum_triangles_double_multithreaded(const CGAL::Polyhedron_3<CGAL::Epick>& poly_triangulated_epick, CGAL::Nef_polyhedron_3<Kernel_>& padding_cube, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+	void minkowski_sum_triangles_double_multithreaded(const CGAL::Polyhedron_3<CGAL::Epick>& poly_triangulated_epick, CGAL::Nef_polyhedron_3<Kernel_>& padding_volume, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 		// We need to copy to non-filtered kernel for multi threading
 		// We're using double so that we can sneak in SMS, it would fail otherwise on missing sqrt()
 		typedef CGAL::Simple_cartesian<double> TriangleKernel;
@@ -306,7 +456,7 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 		auto T0 = timer::measure("minkowski_sum");
 		try {
 			CGAL::Nef_polyhedron_3<Kernel_>* item_nef_copy = new CGAL::Nef_polyhedron_3<Kernel_>(item_nef);
-			result = CGAL::minkowski_sum_3(*item_nef_copy, padding_cube);
+			result = CGAL::minkowski_sum_3(*item_nef_copy, padding_volume);
 			// So this is funky, we got segfaults in the destructor when exceptions were
 			// raised, so we only delete when minkowski (actually the convex_decomposition)
 			// succeed. Otherwise, we just have to incur some memory leak.
@@ -370,7 +520,7 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 		minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
 			poly_triangulated.facets_begin(), 
 			poly_triangulated.facets_end(), 
-			padding_cube, result
+			padding_volume, result
 		);
 		result.transform(item.transformation);
 
@@ -634,6 +784,69 @@ CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::create_bounding_box(co
 
 // Completes the boolean union, extracts exterior and erodes padding radius
 
+#include <CGAL/Surface_mesh_simplification/Edge_collapse_visitor_base.h>
+
+// The following is a Visitor that keeps track of the simplification process.
+// In this example the progress is printed real-time and a few statistics are
+// recorded (and printed in the end).
+//
+struct Stats
+{
+	std::size_t collected = 0;
+	std::size_t processed = 0;
+	std::size_t collapsed = 0;
+	std::size_t non_collapsable = 0;
+	std::size_t cost_uncomputable = 0;
+	std::size_t placement_uncomputable = 0;
+};
+
+template <typename T>
+struct My_visitor : SMS::Edge_collapse_visitor_base<CGAL::Polyhedron_3<T>>
+{
+	My_visitor(Stats* s) : stats(s) {}
+	// Called during the collecting phase for each edge collected.
+	void OnCollected(const Profile&, const boost::optional<double>&)
+	{
+		++(stats->collected);
+		std::cerr << "\rEdges collected: " << stats->collected << std::flush;
+	}
+	// Called during the processing phase for each edge selected.
+	// If cost is absent the edge won't be collapsed.
+	void OnSelected(const Profile&,
+		boost::optional<double> cost,
+		std::size_t initial,
+		std::size_t current)
+	{
+		++(stats->processed);
+		if (!cost)
+			++(stats->cost_uncomputable);
+		if (current == initial)
+			std::cerr << "\n" << std::flush;
+		std::cerr << "\r" << current << std::flush;
+	}
+	// Called during the processing phase for each edge being collapsed.
+	// If placement is absent the edge is left uncollapsed.
+	void OnCollapsing(const Profile&,
+		boost::optional<Point> placement)
+	{
+		if (!placement)
+			++(stats->placement_uncomputable);
+	}
+	// Called for each edge which failed the so called link-condition,
+	// that is, which cannot be collapsed because doing so would
+	// turn the surface mesh into a non-manifold.
+	void OnNonCollapsable(const Profile&)
+	{
+		++(stats->non_collapsable);
+	}
+	// Called after each edge has been collapsed
+	void OnCollapsed(const Profile&, vertex_descriptor)
+	{
+		++(stats->collapsed);
+	}
+	Stats* stats;
+};
+
 void radius_execution_context::finalize() {
 	{
 		auto T = timer::measure("nef_boolean_union");
@@ -644,6 +857,13 @@ void radius_execution_context::finalize() {
 
 	if (no_erosion_) {
 		exterior = boolean_result;
+
+		if (exterior.is_simple()) {
+			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
+		}
+		else {
+			CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
+		}
 	} else {
 
 		auto T2 = timer::measure("result_nef_processing");
@@ -657,79 +877,192 @@ void radius_execution_context::finalize() {
 		// @todo Wasteful: remove interior on Nef?
 		extract_in_place(polyhedron_exterior, LARGEST_AREA);
 
-		{
-			simple_obj_writer tmp_debug("debug-exterior");
-			tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
+		if (settings_.get(radius_settings::SPHERE)) {
+			typedef CGAL::Simple_cartesian<double> TriangleKernel;
+			CGAL::Polyhedron_3<TriangleKernel> poly_simple;
+
+			util::copy::polyhedron(poly_simple, polyhedron_exterior);
+
+			CGAL::Polygon_mesh_processing::triangulate_faces(poly_simple);
+
+			cluster_vertices(poly_simple, ico_edge_length / 2.);
+
+			{
+				simple_obj_writer tmp_debug("debug-after-custering");
+				tmp_debug(nullptr, poly_simple.facets_begin(), poly_simple.facets_end());
+			}
+
+			util::copy::polyhedron(polyhedron_exterior, poly_simple);
+			
+			/*
+			// SMS (again) does not really work, geometrical constraints not sattisfied
+			Stats stats;
+			My_visitor<TriangleKernel> vis(&stats);
+
+			// simplify as small detail create large normal artefacts
+			CGAL::Surface_mesh_simplification::Edge_length_stop_predicate<double> stop(length_threshold * length_threshold);
+			int r = SMS::edge_collapse(poly_simple, stop,
+				CGAL::parameters::vertex_index_map(get(CGAL::vertex_external_index, poly_simple))
+				.halfedge_index_map(get(CGAL::halfedge_external_index, poly_simple))
+				.get_cost(SMS::Edge_length_cost<TriangleKernel>())
+				.get_placement(SMS::Midpoint_placement<TriangleKernel>())
+				.visitor(vis));
+
+			std::cout << "Removed " << r << " edges" << std::endl;
+
+			
+			*/
+
+			// calculate normals
+			std::map<cgal_vertex_descriptor_t, Kernel_::Vector_3> vertex_normals;
+			boost::associative_property_map<std::map<cgal_vertex_descriptor_t, Kernel_::Vector_3>> vertex_normals_map(vertex_normals);
+			CGAL::Polygon_mesh_processing::compute_vertex_normals(polyhedron_exterior, vertex_normals_map);
+			
+			std::map<cgal_face_descriptor_t, Kernel_::Vector_3> face_normals;
+			boost::associative_property_map<std::map<cgal_face_descriptor_t, Kernel_::Vector_3>> face_normals_map(face_normals);
+			CGAL::Polygon_mesh_processing::compute_face_normals(polyhedron_exterior, face_normals_map);
+
+			for (auto& v : vertices(polyhedron_exterior)) {
+
+				typedef CGAL::Face_around_target_circulator<cgal_shape_t> face_around_target_circulator;
+				face_around_target_circulator circ(v->halfedge(), polyhedron_exterior);
+				auto done = circ;
+				CGAL::Vector_3<Kernel_> accum, vnorm;
+				size_t n = 0;
+				do {
+					
+					cgal_face_descriptor_t f = *circ;
+					std::list<cgal_face_descriptor_t> fs = { f };
+					auto A = CGAL::Polygon_mesh_processing::area(fs, polyhedron_exterior);
+					if (A > 1.e-5) {
+						accum += face_normals[f];
+						++n;
+					}
+					++circ;
+				} while (circ != done);
+
+				// We don't just use vertex normals, but use connected facet normals if their size is above a certain threshold.
+				
+				// Let's try how it goes with the vertex clustering, we set n to zero.
+				n = 0;
+
+				if (n) {
+					vnorm = accum / n;
+				}
+				else {
+					vnorm = vertex_normals[v];
+				}
+
+				std::cout << "N " << CGAL::to_double(vnorm.cartesian(0))
+					<< " " << CGAL::to_double(vnorm.cartesian(1))
+					<< " " << CGAL::to_double(vnorm.cartesian(2)) << std::endl;
+
+				std::cout << "p0 " << CGAL::to_double(v->point().cartesian(0))
+					<< " " << CGAL::to_double(v->point().cartesian(1))
+					<< " " << CGAL::to_double(v->point().cartesian(2)) << std::endl;
+
+				v->point() -= vnorm * radius;
+
+				std::cout << "p1 " << CGAL::to_double(v->point().cartesian(0))
+					<< " " << CGAL::to_double(v->point().cartesian(1))
+					<< " " << CGAL::to_double(v->point().cartesian(2)) << std::endl;
+
+			}
+
+			{
+				simple_obj_writer tmp_debug("debug-after-erosion");
+				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
+			}
+
+			cluster_vertices(polyhedron_exterior, ico_edge_length  / 2.);
+
+			{
+				simple_obj_writer tmp_debug("debug-after-custering-again");
+				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
+			}
+
+			// util::copy::polyhedron(polyhedron_exterior, poly_simple);
 		}
+		else {
+
+			{
+				simple_obj_writer tmp_debug("debug-exterior");
+				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
+			}
 
 #if 0
 
-		exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
-		bounding_box = create_bounding_box(polyhedron_exterior);
+			exterior = ifcopenshell::geometry::utils::create_nef_polyhedron(polyhedron_exterior);
+			bounding_box = create_bounding_box(polyhedron_exterior);
 
-		complement = bounding_box - exterior;
-		complement.extract_regularization();
-		// @nb padding cube is potentially slightly larger to result in a thinner result
-		// then another radius for comparison.
-		complement_padded = CGAL::minkowski_sum_3(complement, padding_cube_2);
-		complement_padded.extract_regularization();
+			complement = bounding_box - exterior;
+			complement.extract_regularization();
+			// @nb padding cube is potentially slightly larger to result in a thinner result
+			// then another radius for comparison.
+			complement_padded = CGAL::minkowski_sum_3(complement, padding_volume_2);
+			complement_padded.extract_regularization();
+			T2.stop();
+
+			{
+				auto T = timer::measure("result_nef_to_poly");
+#if 0
+				// @todo I imagine this operation is costly, we can also convert the padded complement to
+				// polyhedron, and remove the connected component that belongs to the bbox, then reverse
+				// the remaining poly to point to the interior?
+				exterior -= complement_padded;
+#else
+				// Rougly twice as fast as the complexity is half (box complexity is negligable).
+
+				// Re above: extracting the interior shell did not prove to be reliable even with
+				// the undocumented function convert_inner_shell_to_polyhedron(). Therefore we
+				// subtract from the padded box as that will have lower complexity than above.
+				// Mark_bounded_volumes on the completement also did not work.
+				exterior = bounding_box - complement_padded;
+#endif
+				T.stop();
+			}
+
+			exterior.extract_regularization();
+
+			if (exterior.is_simple()) {
+				auto T1 = timer::measure("result_nef_to_poly");
+				polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
+				T1.stop();
+
+				auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
+				std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
+			}
+			else {
+				CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
+				std::cout << "Result with radius " << radius << " is not manifold" << std::endl;
+			}
+
+#else
+
+			CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
+			util::copy::polyhedron(poly_triangulated, polyhedron_exterior);
+			if (!CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated)) {
+				std::cerr << "unable to triangulate all faces" << std::endl;
+				return;
+			}
+			minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
+				poly_triangulated.facets_begin(),
+				poly_triangulated.facets_end(),
+				padding_volume, exterior
+				);
+			if (exterior.is_simple()) {
+				polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
+			}
+			else {
+				CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
+			}
+
+			extract_in_place(polyhedron_exterior, SECOND_LARGEST_AREA);
+#endif
+
+		}
+
 		T2.stop();
-
-		{
-			auto T = timer::measure("result_nef_to_poly");
-#if 0
-			// @todo I imagine this operation is costly, we can also convert the padded complement to
-			// polyhedron, and remove the connected component that belongs to the bbox, then reverse
-			// the remaining poly to point to the interior?
-			exterior -= complement_padded;
-#else
-			// Rougly twice as fast as the complexity is half (box complexity is negligable).
-
-			// Re above: extracting the interior shell did not prove to be reliable even with
-			// the undocumented function convert_inner_shell_to_polyhedron(). Therefore we
-			// subtract from the padded box as that will have lower complexity than above.
-			// Mark_bounded_volumes on the completement also did not work.
-			exterior = bounding_box - complement_padded;
-#endif
-			T.stop();
-		}
-
-		exterior.extract_regularization();
-
-		if (exterior.is_simple()) {
-			auto T1 = timer::measure("result_nef_to_poly");
-			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
-			T1.stop();
-
-			auto vol = CGAL::Polygon_mesh_processing::volume(polyhedron_exterior);
-			std::cout << "Volume with radius " << radius << " is " << vol << std::endl;
-		} else {
-			CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
-			std::cout << "Result with radius " << radius << " is not manifold" << std::endl;
-		}
-
-#else
-
-		CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
-		util::copy::polyhedron(poly_triangulated, polyhedron_exterior);
-		if (!CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated)) {
-			std::cerr << "unable to triangulate all faces" << std::endl;
-			return;
-		}
-		minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
-			poly_triangulated.facets_begin(),
-			poly_triangulated.facets_end(),
-			padding_cube, exterior
-		);
-		if (exterior.is_simple()) {
-			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
-		} else {
-			CGAL::convert_nef_polyhedron_to_polygon_mesh(exterior, polyhedron_exterior);
-		}
-
-		extract_in_place(polyhedron_exterior, SECOND_LARGEST_AREA);
-#endif
-
 	}
 
 	std::cout << "exterior poly num facets: " << polyhedron_exterior.size_of_facets() << std::endl;
