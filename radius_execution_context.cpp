@@ -953,6 +953,7 @@ void radius_execution_context::finalize() {
 					vnorm = vertex_normals[v];
 				}
 
+				/*
 				std::cout << "N " << CGAL::to_double(vnorm.cartesian(0))
 					<< " " << CGAL::to_double(vnorm.cartesian(1))
 					<< " " << CGAL::to_double(vnorm.cartesian(2)) << std::endl;
@@ -960,13 +961,15 @@ void radius_execution_context::finalize() {
 				std::cout << "p0 " << CGAL::to_double(v->point().cartesian(0))
 					<< " " << CGAL::to_double(v->point().cartesian(1))
 					<< " " << CGAL::to_double(v->point().cartesian(2)) << std::endl;
-
+				*/
+				
 				v->point() -= vnorm * radius;
 
+				/*
 				std::cout << "p1 " << CGAL::to_double(v->point().cartesian(0))
 					<< " " << CGAL::to_double(v->point().cartesian(1))
 					<< " " << CGAL::to_double(v->point().cartesian(2)) << std::endl;
-
+				*/
 			}
 
 			{
