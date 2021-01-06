@@ -175,7 +175,7 @@ int process_geometries::operator()(const std::function<void(shape_callback_item&
 					geom_object->product(),
 					geom_object->guid(),
 					geom_object->type(),
-					geom_object->geometry().id(),
+					std::to_string(g.ItemId()),
 					element_transformation,
 					s,
 					opt_style,

@@ -406,6 +406,10 @@ namespace {
 	}
 }
 
+void process_shape_item(shape_callback_item& item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+
+}
+
 void radius_execution_context::operator()(shape_callback_item& item) {
 	if (item.src != previous_src) {
 		if (item.geom_reference == previous_geom_ref) {

@@ -5,9 +5,11 @@
 #include <map>
 #include <string>
 #include <chrono>
+#include <mutex>
 
 class timer {
 	typedef std::map<std::string, double> timings_map;
+	std::mutex write_mutex;
 	timings_map timings_;
 
 public:
@@ -17,15 +19,17 @@ public:
 		std::string key;
 		timepoint start_, stop_;
 		timings_map& timings;
+		std::mutex& mutex;
 
 	public:
-		stopwatch(timings_map& timings) : timings(timings) {}
+		stopwatch(timings_map& timings, std::mutex& mutex) : timings(timings), mutex(mutex) {}
 		stopwatch& start(const std::string& s) {
 			key = s;
 			start_ = std::chrono::steady_clock::now();
 			return *this;
 		}
 		void stop() {
+			std::lock_guard<std::mutex> lk(mutex);
 			stop_ = std::chrono::steady_clock::now();
 			timings[key] += std::chrono::duration<double>(stop_ - start_).count();
 		}
@@ -37,7 +41,7 @@ public:
 	}
 
 	static stopwatch measure(const std::string& s) {
-		return stopwatch(i().timings_).start(s);
+		return stopwatch(i().timings_, i().write_mutex).start(s);
 	}
 
 	static void print(std::ostream& s) {

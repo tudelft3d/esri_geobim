@@ -50,20 +50,20 @@ int main(int argc, char** argv) {
 		auto R = binary_search(cec->items.begin(), cec->items.end(), { "0.001", "0.2" });
 		std::cout << "Largest gap found with R / 2 ~ " << R << std::endl;
 	} else {
-		std::vector<radius_execution_context> radius_contexts;
+		std::vector<std::unique_ptr<radius_execution_context>> radius_contexts;
 		bool first = true;
 		for (auto& r : settings.radii) {
 			// 2nd is narrower (depending on ifdef above, appears to be necessary).
-			radius_contexts.emplace_back(r, radius_settings()
+			radius_contexts.push_back(std::make_unique<radius_execution_context>(r, radius_settings()
 				.set(radius_settings::NARROWER, !first)
 				.set(radius_settings::MINKOWSKI_TRIANGLES, settings.minkowski_triangles)
 				.set(radius_settings::NO_EROSION, settings.no_erosion)
-				.set(radius_settings::SPHERE, settings.spherical_padding));
+				.set(radius_settings::SPHERE, settings.spherical_padding)));
 			first = false;
 		}
 
 		for (auto& c : radius_contexts) {
-			callback.contexts.push_back(&c);
+			callback.contexts.push_back(&*c);
 		}
 
 		p = std::make_unique<process_geometries>(settings);
@@ -84,11 +84,11 @@ int main(int argc, char** argv) {
 		T1.stop();
 
 		for (auto& c : radius_contexts) {
-			if (c.empty()) {
+			if (c->empty()) {
 				continue;
 			}
 
-			c.finalize();
+			c->finalize();
 		}
 
 		p.reset();
@@ -97,19 +97,19 @@ int main(int argc, char** argv) {
 			auto T0 = timer::measure("semantic_segmentation");
 			global_execution_context<Kernel_>::segmentation_return_type style_facet_pairs;
 			if (settings.exact_segmentation) {
-				style_facet_pairs = global_context_exact.segment(c.polyhedron_exterior);
+				style_facet_pairs = global_context_exact.segment(c->polyhedron_exterior);
 			} else {
-				style_facet_pairs = global_context.segment(c.polyhedron_exterior);
+				style_facet_pairs = global_context.segment(c->polyhedron_exterior);
 			}
 			T0.stop();
 
-			city_json_writer write_city(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
+			city_json_writer write_city(settings.output_filename + c->radius_str);
 			for (auto& p : style_facet_pairs) {
 				write_city(p.first, p.second.begin(), p.second.end());
 			}
 			write_city.finalize();
 
-			simple_obj_writer write_obj(settings.output_filename + boost::lexical_cast<std::string>(c.radius));
+			simple_obj_writer write_obj(settings.output_filename + c->radius_str);
 			for (auto& p : style_facet_pairs) {
 				write_obj(p.first, p.second.begin(), p.second.end());
 			}
@@ -135,10 +135,10 @@ int main(int argc, char** argv) {
 		auto T2 = timer::measure("difference_overlay");
 		auto it = radius_contexts.begin();
 		for (auto jt = it + 1; jt != radius_contexts.end(); ++it, ++jt) {
-			radius_comparison difference(*it, *jt, 0.001);
+			radius_comparison difference(**it, **jt, 0.001);
 			simple_obj_writer obj("difference-"
-				+ boost::lexical_cast<std::string>(it->radius) + "-"
-				+ boost::lexical_cast<std::string>(jt->radius));
+				+ boost::lexical_cast<std::string>((*it)->radius) + "-"
+				+ boost::lexical_cast<std::string>((*jt)->radius));
 			obj(nullptr, difference.difference_poly.facets_begin(), difference.difference_poly.facets_end());
 		}
 		T2.stop();

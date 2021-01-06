@@ -58,6 +58,12 @@ struct radius_settings : std::bitset<4> {
 	}
 };
 
+namespace {
+	void process_shape_item(shape_callback_item& item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+
+	}
+}
+
 // State (polyhedra mostly) that are relevant only for one radius
 struct radius_execution_context : public execution_context {
 	radius_settings settings_;
@@ -69,13 +75,33 @@ struct radius_execution_context : public execution_context {
 	enum extract_component { INTERIOR, EXTERIOR, LARGEST_AREA, SECOND_LARGEST_AREA };
 	bool minkowski_triangles_, no_erosion_, empty_;
 
+	boost::optional<size_t> threads;
+
 	radius_execution_context(const std::string& radius, radius_settings=radius_settings());
+	radius_execution_context(const radius_execution_context&) = delete;
+	radius_execution_context& operator=(const radius_execution_context&) = delete;
+
 
 	IfcUtil::IfcBaseEntity* previous_src = nullptr;
 	std::string previous_geom_ref;
 	lazy_nary_union<CGAL::Nef_polyhedron_3<Kernel_> > per_product_collector;
 	cgal_placement_t last_place;
 
+	struct geometry_reference {
+		cgal_placement_t inverse, own;
+	};
+	typedef std::list< CGAL::Nef_polyhedron_3<Kernel_> > result_list_t;
+
+
+	std::vector< std::future<void> > threadpool_;
+	// this is a mapping from Geometry::ItemId / shape_item::geom_ref
+	std::map<std::string, geometry_reference> reused_geometries;
+	result_list_t results;
+	// This is a multimap as a an product can hold multiple representation items
+	std::multimap<IfcUtil::IfcBaseEntity*, typename result_list_t::const_iterator> src_result;
+
+	// + map for reused items
+	// + finalize() does insertion in n-ary_bool
 	void operator()(shape_callback_item& item);
 
 	// Extract the exterior component of a CGAL Polyhedron
