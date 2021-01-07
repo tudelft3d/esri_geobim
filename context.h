@@ -11,7 +11,7 @@
 // Generated for every representation *item* in the IFC file
 struct shape_callback_item {
 	IfcUtil::IfcBaseEntity* src;
-	std::string id, type, geom_reference;
+	std::string id, type, part_reference, geom_reference;
 	cgal_placement_t transformation;
 	cgal_shape_t polyhedron;
 	const ifcopenshell::geometry::taxonomy::style* style;

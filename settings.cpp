@@ -8,6 +8,7 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 
 	std::string entities, radii;
 
+	size_t threads;
 	typedef po::command_line_parser command_line_parser;
 	po::options_description options("Command line options");
 	options.add_options()
@@ -25,7 +26,9 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 		("exclude,x", "entities are to be excluded")
 		("files", po::value<std::vector<std::string>>()->multitoken(), "input and output filenames")
 		("output-file", new po::typed_value<std::string, char>(&settings.output_filename), "output OBJ file")
-		("radii", new po::typed_value<std::string, char>(&radii), "semicolon separated list of radii");
+		("radii", new po::typed_value<std::string, char>(&radii), "semicolon separated list of radii")
+		("threads,j", po::value(&threads), "number of processing threads")
+		;
 
 	po::positional_options_description positional_options;
 	positional_options.add("files", -1);
@@ -76,6 +79,9 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 	settings.debug = vmap.count("debug");
 	settings.minkowski_triangles = vmap.count("minkowski-triangles");
 	settings.spherical_padding = vmap.count("spherical-padding");
+	if (vmap.count("threads")) {
+		settings.threads = threads;
+	}
 
 	std::transform(settings.input_filenames.begin(), settings.input_filenames.end(), std::back_inserter(settings.file), [](const std::string& s) {
 		IfcParse::IfcFile* f = new IfcParse::IfcFile(s);

@@ -23,6 +23,8 @@
 #include <CGAL/cluster_point_set.h>
 #include <CGAL/compute_average_spacing.h>
 
+#include <CGAL/Polygon_mesh_processing/repair_polygon_soup.h>
+
 static bool ENSURE_2ND_OP_NARROWER = true;
 static double MAKE_OP2_NARROWER = ENSURE_2ND_OP_NARROWER ? -2e-7 : 0.0;
 
@@ -42,6 +44,7 @@ namespace {
 		}
 	};
 
+	// @todo this should not be based on euclidean distance, but rather distance over edge/face as it will now close holes which is not the intention
 	template <typename T>
 	void cluster_vertices(T& s, double r) {
 		typedef typename T::Traits::Kernel K;
@@ -80,8 +83,64 @@ namespace {
 			}
 		}
 
+		std::map<std::set<size_t>, size_t> triangle_use;
+		for (auto& x : new_indices) {
+			std::set<size_t> s(x.begin(), x.end());
+			triangle_use[s] ++;
+		}
+
+		auto it = new_indices.end();
+		while (it > new_indices.begin())
+		{
+			it--;
+			std::set<size_t> s(it->begin(), it->end());
+			if (triangle_use[s] == 2) {
+				it = new_indices.erase(it);
+				std::cerr << "erasing" << std::endl;
+			}
+		}
+		
+		// std::ofstream fs("debug.txt");
+
+		std::map<std::pair<size_t, size_t>, size_t> edge_use;
+		auto add_use = [&edge_use](size_t a, size_t b) {
+			if (a > b) std::swap(a, b);
+			edge_use[{a, b}]++;
+		};
+		// fs << "[\n";
+		for (auto& tri : new_indices) {
+			// fs << "[" << tri[0] << "," << tri[1] << "," << tri[2] << "],\n";
+			add_use(tri[0], tri[1]);
+			add_use(tri[1], tri[2]);
+			add_use(tri[2], tri[0]);
+		}
+		// fs << "]";
+		// fs.close();
+
+		for (auto& p : edge_use) {
+			if (p.second != 2) {
+				std::cerr << "non-manifold: " << p.first.first << " " << p.first.second;
+				// std::cin.get();
+			}
+		}
+
+		std::cerr << "removed points: " << CGAL::Polygon_mesh_processing::remove_isolated_points_in_polygon_soup(new_points, new_indices) << std::endl;
+
+		std::cerr << "valid: " << CGAL::Polygon_mesh_processing::is_polygon_soup_a_polygon_mesh(new_indices) << std::endl;
+
 		T new_poly;
 		CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(new_points, new_indices, new_poly);
+
+		/*
+		for (auto it = new_poly.vertices_begin(); it != new_poly.vertices_begin(); ++it) {
+			if (it != it->halfedge()->vertex()) {
+				auto jt = std::find(new_points.begin(), new_points.end(), it->point());
+				auto NN = std::distance(new_points.begin(), jt);
+				std::cin.get();
+				std::cerr << NN << std::endl;
+			}
+		}
+		*/
 
 		s = new_poly;
 	}
@@ -93,7 +152,7 @@ radius_execution_context::radius_execution_context(const std::string& r, radius_
 	, radius(boost::lexical_cast<double>(r))
 	, minkowski_triangles_(rs.get(radius_settings::MINKOWSKI_TRIANGLES))
 	, no_erosion_(rs.get(radius_settings::NO_EROSION))
-	, empty_(true)
+	, empty_(false) // no longer relevant, bug fixed
 {
 	{
 		if (rs.get(radius_settings::SPHERE)) {
@@ -406,253 +465,326 @@ namespace {
 	}
 }
 
-void process_shape_item(shape_callback_item& item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 
+// Create a bounding box (six-faced Nef poly) around a CGAL Polyhedron
+CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t & input, double radius) {
+	// @todo we can probably use
+	// CGAL::Nef_polyhedron_3<Kernel_> nef(CGAL::Nef_polyhedron_3<Kernel_>::COMPLETE)
+	// Implementation detail: there is always an implicit box around the Nef, even when open or closed.
+	// Never mind: The Minkowski sum cannot operate on unbounded inputs...
+
+	// Create the complement of the Nef by subtracting from its bounding box,
+	// see: https://github.com/tudelft3d/ifc2citygml/blob/master/off2citygml/Minkowski.cpp#L23
+	auto bounding_box = CGAL::Polygon_mesh_processing::bbox(input);
+	Kernel_::Point_3 bbmin(bounding_box.xmin(), bounding_box.ymin(), bounding_box.zmin());
+	Kernel_::Point_3 bbmax(bounding_box.xmax(), bounding_box.ymax(), bounding_box.zmax());
+	Kernel_::Vector_3 d(radius, radius, radius);
+	bbmin = CGAL::ORIGIN + ((bbmin - CGAL::ORIGIN) - d);
+	bbmax = CGAL::ORIGIN + ((bbmax - CGAL::ORIGIN) + d);
+	cgal_shape_t poly_box = ifcopenshell::geometry::utils::create_cube(bbmin, bbmax);
+	return ifcopenshell::geometry::utils::create_nef_polyhedron(poly_box);
 }
 
-void radius_execution_context::operator()(shape_callback_item& item) {
-	if (item.src != previous_src) {
-		if (item.geom_reference == previous_geom_ref) {
-			std::cout << "Reusing padded geometry for " << item.src->data().toString() << std::endl;
-			auto product = per_product_collector.get_union();
-			product.transform(last_place.inverse());
-			product.transform(item.transformation);
-			union_collector.add_polyhedron(product);
+
+class process_shape_item {
+	double radius;
+	bool minkowski_triangles_;
+	CGAL::Nef_polyhedron_3<Kernel_> padding_volume;
+public:
+
+	process_shape_item(double r, bool mintri, CGAL::Nef_polyhedron_3<Kernel_> pv)
+		: radius(r)
+		, minkowski_triangles_(mintri)
+		, padding_volume(pv)
+	{}
+	
+	void operator()(shape_callback_item& item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+		CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
+		util::copy::polyhedron(poly_triangulated, item.polyhedron);
+		if (!CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated)) {
+			std::cerr << "unable to triangulate all faces" << std::endl;
 			return;
 		}
-		// per_product_collector = CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> >();
-		per_product_collector.clear();
-	}
 
-	CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
-	util::copy::polyhedron(poly_triangulated, item.polyhedron);
-	if (!CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated)) {
-		std::cerr << "unable to triangulate all faces" << std::endl;
-		return;
-	}
+		std::vector<
+			std::pair<
+			boost::graph_traits<CGAL::Polyhedron_3<CGAL::Epick>>::face_descriptor,
+			boost::graph_traits<CGAL::Polyhedron_3<CGAL::Epick>>::face_descriptor>> self_intersections;
+		CGAL::Polygon_mesh_processing::self_intersections(poly_triangulated, std::back_inserter(self_intersections));
 
-	std::vector<
-		std::pair<
-		boost::graph_traits<CGAL::Polyhedron_3<CGAL::Epick>>::face_descriptor,
-		boost::graph_traits<CGAL::Polyhedron_3<CGAL::Epick>>::face_descriptor>> self_intersections;
-	CGAL::Polygon_mesh_processing::self_intersections(poly_triangulated, std::back_inserter(self_intersections));
-
-	previous_src = item.src;
-	previous_geom_ref = item.geom_reference;
-	last_place = item.transformation;
-
-	CGAL::Nef_polyhedron_3<Kernel_> item_nef, result;
-	bool item_nef_succeeded = false;
-	if (self_intersections.empty()) {
-		if (!(item_nef_succeeded = item.to_nef_polyhedron(item_nef))) {
-			std::cerr << "no nef for product" << std::endl;
+		CGAL::Nef_polyhedron_3<Kernel_> item_nef;
+		bool item_nef_succeeded = false;
+		if (self_intersections.empty()) {
+			if (!(item_nef_succeeded = item.to_nef_polyhedron(item_nef))) {
+				std::cerr << "no nef for product" << std::endl;
+			}
 		}
-	} else {
-		std::cerr << "self intersections, not trying to convert to Nef" << std::endl;
-	}
-
-	bool result_set = false;
-	bool failed = false;
-
-	if (!(minkowski_triangles_ || !item_nef_succeeded || !self_intersections.empty())) {
-		item_nef.transform(item.transformation);
-
-		auto T0 = timer::measure("minkowski_sum");
-		try {
-			CGAL::Nef_polyhedron_3<Kernel_>* item_nef_copy = new CGAL::Nef_polyhedron_3<Kernel_>(item_nef);
-			result = CGAL::minkowski_sum_3(*item_nef_copy, padding_volume);
-			// So this is funky, we got segfaults in the destructor when exceptions were
-			// raised, so we only delete when minkowski (actually the convex_decomposition)
-			// succeed. Otherwise, we just have to incur some memory leak.
-			// @todo report this to cgal.
-			delete item_nef_copy;
-			result_set = true;
-		} catch (CGAL::Failure_exception&) {
-			failed = true;
-			std::cerr << "Minkowski on volume failed, retrying with individual triangles" << std::endl;
-		}
-		T0.stop();
-	}
-
-	double max_triangle_area = 0.;
-
-	for (auto &face : faces(poly_triangulated)) {
-
-		if (!face->is_triangle()) {
-			std::cout << "Warning: non-triangular face!" << std::endl;
-			continue;
+		else {
+			std::cerr << "self intersections, not trying to convert to Nef" << std::endl;
 		}
 
-		CGAL::Polyhedron_3<CGAL::Epick>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
-		CGAL::Point_3<CGAL::Epick> points[3];
+		bool result_set = false;
+		bool failed = false;
 
-		int i = 0;
-		do {
-			points[i] = current_halfedge->vertex()->point();
-			++i;
-			++current_halfedge;
-		} while (current_halfedge != face->facet_begin());
+		if (!(minkowski_triangles_ || !item_nef_succeeded || !self_intersections.empty())) {
+			item_nef.transform(item.transformation);
 
-		double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<CGAL::Epick>(points[0], points[1], points[2]).squared_area()));
-
-		if (A > max_triangle_area) {
-			max_triangle_area = A;
-		}
-	}
-
-	if (!result_set && (poly_triangulated.size_of_facets() > 1000 || max_triangle_area < 1.e-5)) {
-
-		if (poly_triangulated.size_of_facets() > 1000) {
-			std::cerr << "Too many individual triangles, using bounding box" << std::endl;
-		} else {
-			std::cerr << "Max triangle area is " << max_triangle_area << ", using bounding box" << std::endl;
-		}
-		auto bb = CGAL::Polygon_mesh_processing::bbox(item.polyhedron);
-		cgal_point_t lower(bb.min(0) - radius, bb.min(1) - radius, bb.min(2) - radius);
-		cgal_point_t upper(bb.max(0) + radius, bb.max(1) + radius, bb.max(2) + radius);
-		auto bbpl = ifcopenshell::geometry::utils::create_cube(lower, upper);
-		result = ifcopenshell::geometry::utils::create_nef_polyhedron(bbpl);
-
-	} else if (!result_set) {
-		
-		auto T2 = timer::measure("self_intersection_handling");
-
-		if (self_intersections.size()) {
-			std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
+			auto T0 = timer::measure("minkowski_sum");
+			try {
+				CGAL::Nef_polyhedron_3<Kernel_>* item_nef_copy = new CGAL::Nef_polyhedron_3<Kernel_>(item_nef);
+				result = CGAL::minkowski_sum_3(*item_nef_copy, padding_volume);
+				// So this is funky, we got segfaults in the destructor when exceptions were
+				// raised, so we only delete when minkowski (actually the convex_decomposition)
+				// succeed. Otherwise, we just have to incur some memory leak.
+				// @todo report this to cgal.
+				delete item_nef_copy;
+				result_set = true;
+			}
+			catch (CGAL::Failure_exception&) {
+				failed = true;
+				std::cerr << "Minkowski on volume failed, retrying with individual triangles" << std::endl;
+			}
+			T0.stop();
 		}
 
-		minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
-			poly_triangulated.facets_begin(), 
-			poly_triangulated.facets_end(), 
-			padding_volume, result
-		);
-		result.transform(item.transformation);
+		double max_triangle_area = 0.;
 
-		T2.stop();
-	}
+		for (auto &face : faces(poly_triangulated)) {
 
-	auto T1 = timer::measure("opening_handling");
-	if (item.wall_direction && item.openings.size()) {
-		static const Eigen::Vector3d Zax(0, 0, 1);
-		// @todo derive from model.
-		// @todo since many walls will be parallel we can cache these polyhedrons
-		static const double EPS = 1.e-5;
+			if (!face->is_triangle()) {
+				std::cout << "Warning: non-triangular face!" << std::endl;
+				continue;
+			}
 
-		auto Yax = Zax.cross(*item.wall_direction).normalized();
+			CGAL::Polyhedron_3<CGAL::Epick>::Halfedge_around_facet_const_circulator current_halfedge = face->facet_begin();
+			CGAL::Point_3<CGAL::Epick> points[3];
 
-		auto x0 = *item.wall_direction * -radius;
-		auto x1 = *item.wall_direction * +radius;
+			int i = 0;
+			do {
+				points[i] = current_halfedge->vertex()->point();
+				++i;
+				++current_halfedge;
+			} while (current_halfedge != face->facet_begin());
 
-		auto y0 = Yax * -(radius + EPS);
-		auto y1 = Yax * +(radius + EPS);
+			double A = std::sqrt(CGAL::to_double(CGAL::Triangle_3<CGAL::Epick>(points[0], points[1], points[2]).squared_area()));
 
-		Kernel_::Point_3 X0(x0(0), x0(1), x0(2));
-		Kernel_::Point_3 X1(x1(0), x1(1), x1(2));
+			if (A > max_triangle_area) {
+				max_triangle_area = A;
+			}
+		}
 
-		Kernel_::Point_3 Y0(y0(0), y0(1), y0(2));
-		Kernel_::Point_3 Y1(y1(0), y1(1), y1(2));
+		if (!result_set && (poly_triangulated.size_of_facets() > 1000 || max_triangle_area < 1.e-5)) {
 
-		Kernel_::Point_3 Z0(0, 0, -radius);
-		Kernel_::Point_3 Z1(0, 0, +radius);
+			if (poly_triangulated.size_of_facets() > 1000) {
+				std::cerr << "Too many individual triangles, using bounding box" << std::endl;
+			}
+			else {
+				std::cerr << "Max triangle area is " << max_triangle_area << ", using bounding box" << std::endl;
+			}
+			auto bb = CGAL::Polygon_mesh_processing::bbox(item.polyhedron);
+			cgal_point_t lower(bb.min(0) - radius, bb.min(1) - radius, bb.min(2) - radius);
+			cgal_point_t upper(bb.max(0) + radius, bb.max(1) + radius, bb.max(2) + radius);
+			auto bbpl = ifcopenshell::geometry::utils::create_cube(lower, upper);
+			result = ifcopenshell::geometry::utils::create_nef_polyhedron(bbpl);
 
-		// CGAL::Nef_polyhedron_3<Kernel_> X(CGAL::Segment_3<Kernel_>(X0, X1));
-		CGAL::Nef_polyhedron_3<Kernel_> Y(CGAL::Segment_3<Kernel_>(Y0, Y1));
-		// CGAL::Nef_polyhedron_3<Kernel_> Z(CGAL::Segment_3<Kernel_>(Z0, Z1));
-		// auto ZX = CGAL::minkowski_sum_3(X, Z);
+		}
+		else if (!result_set) {
 
-		// manual minkowski sum...
-		CGAL::Polyhedron_3<Kernel_> zx;
-		std::list<cgal_point_t> zx_points{ {
-			CGAL::ORIGIN + ((X0 - CGAL::ORIGIN) + (Z0 - CGAL::ORIGIN)),
-			CGAL::ORIGIN + ((X1 - CGAL::ORIGIN) + (Z0 - CGAL::ORIGIN)),
-			CGAL::ORIGIN + ((X1 - CGAL::ORIGIN) + (Z1 - CGAL::ORIGIN)),
-			CGAL::ORIGIN + ((X0 - CGAL::ORIGIN) + (Z1 - CGAL::ORIGIN))
-		} };
-		std::vector<std::vector<int>> zx_idxs{ {{{0,1,2,3}}} };
-		util::PolyFromMesh<cgal_shape_t::HDS> m(zx_points, zx_idxs);
-		zx.delegate(m);
-		CGAL::Nef_polyhedron_3<Kernel_> ZX(zx);
+			auto T2 = timer::measure("self_intersection_handling");
 
-		CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > opening_union;
-		for (auto& op : item.openings) {
+			if (self_intersections.size()) {
+				std::cerr << self_intersections.size() << " self-intersections for product" << std::endl;
+			}
 
-			const auto& xdir = *item.wall_direction;
-			double min_dot = +std::numeric_limits<double>::infinity();
-			double max_dot = -std::numeric_limits<double>::infinity();
-			double min_z = +std::numeric_limits<double>::infinity();
-			double max_z = -std::numeric_limits<double>::infinity();
-
-			for (const auto& v : vertices(op->polyhedron)) {
-				auto p = v->point();
-				p = p.transform(op->transformation);
-				Eigen::Vector3d vv(
-					CGAL::to_double(p.cartesian(0)),
-					CGAL::to_double(p.cartesian(1)),
-					CGAL::to_double(p.cartesian(2))
+			minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
+				poly_triangulated.facets_begin(),
+				poly_triangulated.facets_end(),
+				padding_volume, result
 				);
-				double d = xdir.dot(vv);
-				if (d < min_dot) {
-					min_dot = d;
-				}
-				if (d > max_dot) {
-					max_dot = d;
-				}
-				if (vv.z() < min_z) {
-					min_z = vv.z();
-				}
-				if (vv.z() > max_z) {
-					max_z = vv.z();
-				}
-			}
+			result.transform(item.transformation);
 
-			// These are basically workarounds for a bug in
-			// nary_union<T> which is also used on minkowski of concave operands.
-			// It segaults on getting front() of an empty queue.
-			// with the patch https://patch-diff.githubusercontent.com/raw/CGAL/cgal/pull/4768.patch
-			// (applied now by the IfcOpenShell build script)
-			// these fixes are not necessary anymore.
-			if ((max_dot - min_dot) < radius * 2) {
-				std::cerr << "Opening too narrow to have effect after incorporating radius, skipping" << std::endl;
-				continue;
-			}
+			T2.stop();
+		}
 
-			if ((max_z - min_z) < radius * 2) {
-				std::cerr << "Opening too narrow to have effect after incorporating radius, skipping" << std::endl;
-				continue;
-			}
+		auto T1 = timer::measure("opening_handling");
+		if (item.wall_direction && item.openings.size()) {
+			static const Eigen::Vector3d Zax(0, 0, 1);
+			// @todo derive from model.
+			// @todo since many walls will be parallel we can cache these polyhedrons
+			static const double EPS = 1.e-5;
 
-			auto bounds = create_bounding_box(op->polyhedron);
-			CGAL::Nef_polyhedron_3<Kernel_> opening_nef;
-			if (!op->to_nef_polyhedron(opening_nef)) {
-				std::cerr << "no nef for opening" << std::endl;
-				continue;
-			}
-			opening_nef.transform(op->transformation);
-			bounds.transform(op->transformation);
+			auto Yax = Zax.cross(*item.wall_direction).normalized();
 
-			auto temp = bounds - opening_nef;
-			temp = CGAL::minkowski_sum_3(ZX, temp);
-			temp = bounds - temp;
-			temp = CGAL::minkowski_sum_3(temp, Y);
+			auto x0 = *item.wall_direction * -radius;
+			auto x1 = *item.wall_direction * +radius;
+
+			auto y0 = Yax * -(radius + EPS);
+			auto y1 = Yax * +(radius + EPS);
+
+			Kernel_::Point_3 X0(x0(0), x0(1), x0(2));
+			Kernel_::Point_3 X1(x1(0), x1(1), x1(2));
+
+			Kernel_::Point_3 Y0(y0(0), y0(1), y0(2));
+			Kernel_::Point_3 Y1(y1(0), y1(1), y1(2));
+
+			Kernel_::Point_3 Z0(0, 0, -radius);
+			Kernel_::Point_3 Z1(0, 0, +radius);
+
+			// CGAL::Nef_polyhedron_3<Kernel_> X(CGAL::Segment_3<Kernel_>(X0, X1));
+			CGAL::Nef_polyhedron_3<Kernel_> Y(CGAL::Segment_3<Kernel_>(Y0, Y1));
+			// CGAL::Nef_polyhedron_3<Kernel_> Z(CGAL::Segment_3<Kernel_>(Z0, Z1));
+			// auto ZX = CGAL::minkowski_sum_3(X, Z);
+
+			// manual minkowski sum...
+			CGAL::Polyhedron_3<Kernel_> zx;
+			std::list<cgal_point_t> zx_points{ {
+				CGAL::ORIGIN + ((X0 - CGAL::ORIGIN) + (Z0 - CGAL::ORIGIN)),
+				CGAL::ORIGIN + ((X1 - CGAL::ORIGIN) + (Z0 - CGAL::ORIGIN)),
+				CGAL::ORIGIN + ((X1 - CGAL::ORIGIN) + (Z1 - CGAL::ORIGIN)),
+				CGAL::ORIGIN + ((X0 - CGAL::ORIGIN) + (Z1 - CGAL::ORIGIN))
+			} };
+			std::vector<std::vector<int>> zx_idxs{ {{{0,1,2,3}}} };
+			util::PolyFromMesh<cgal_shape_t::HDS> m(zx_points, zx_idxs);
+			zx.delegate(m);
+			CGAL::Nef_polyhedron_3<Kernel_> ZX(zx);
+
+			CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > opening_union;
+			for (auto& op : item.openings) {
+
+				const auto& xdir = *item.wall_direction;
+				double min_dot = +std::numeric_limits<double>::infinity();
+				double max_dot = -std::numeric_limits<double>::infinity();
+				double min_z = +std::numeric_limits<double>::infinity();
+				double max_z = -std::numeric_limits<double>::infinity();
+
+				for (const auto& v : vertices(op->polyhedron)) {
+					auto p = v->point();
+					p = p.transform(op->transformation);
+					Eigen::Vector3d vv(
+						CGAL::to_double(p.cartesian(0)),
+						CGAL::to_double(p.cartesian(1)),
+						CGAL::to_double(p.cartesian(2))
+					);
+					double d = xdir.dot(vv);
+					if (d < min_dot) {
+						min_dot = d;
+					}
+					if (d > max_dot) {
+						max_dot = d;
+					}
+					if (vv.z() < min_z) {
+						min_z = vv.z();
+					}
+					if (vv.z() > max_z) {
+						max_z = vv.z();
+					}
+				}
+
+				// These are basically workarounds for a bug in
+				// nary_union<T> which is also used on minkowski of concave operands.
+				// It segaults on getting front() of an empty queue.
+				// with the patch https://patch-diff.githubusercontent.com/raw/CGAL/cgal/pull/4768.patch
+				// (applied now by the IfcOpenShell build script)
+				// these fixes are not necessary anymore.
+				if ((max_dot - min_dot) < radius * 2) {
+					std::cerr << "Opening too narrow to have effect after incorporating radius, skipping" << std::endl;
+					continue;
+				}
+
+				if ((max_z - min_z) < radius * 2) {
+					std::cerr << "Opening too narrow to have effect after incorporating radius, skipping" << std::endl;
+					continue;
+				}
+
+				auto bounds = create_bounding_box(op->polyhedron, radius);
+				CGAL::Nef_polyhedron_3<Kernel_> opening_nef;
+				if (!op->to_nef_polyhedron(opening_nef)) {
+					std::cerr << "no nef for opening" << std::endl;
+					continue;
+				}
+				opening_nef.transform(op->transformation);
+				bounds.transform(op->transformation);
+
+				auto temp = bounds - opening_nef;
+				temp = CGAL::minkowski_sum_3(ZX, temp);
+				temp = bounds - temp;
+				temp = CGAL::minkowski_sum_3(temp, Y);
 
 #ifdef GEOBIM_DEBUG
-			simple_obj_writer x("opening-" + op->id);
-			x(nullptr, item.polyhedron.facets_begin(), item.polyhedron.facets_end());
-			x(nullptr, op->polyhedron.facets_begin(), op->polyhedron.facets_end());
-			CGAL::Polyhedron_3<Kernel_> temp2;
-			temp.convert_to_polyhedron(temp2);
-			x(nullptr, temp2.facets_begin(), temp2.facets_end());
+				simple_obj_writer x("opening-" + op->id);
+				x(nullptr, item.polyhedron.facets_begin(), item.polyhedron.facets_end());
+				x(nullptr, op->polyhedron.facets_begin(), op->polyhedron.facets_end());
+				CGAL::Polyhedron_3<Kernel_> temp2;
+				temp.convert_to_polyhedron(temp2);
+				x(nullptr, temp2.facets_begin(), temp2.facets_end());
 #endif
 
-			result -= temp;
+				result -= temp;
+			}
+		}
+		T1.stop();
+	}
+};
+
+void radius_execution_context::operator()(shape_callback_item& item) {
+	auto it = first_product_for_geom_id.find(item.geom_reference);
+	if (it != first_product_for_geom_id.end()) {
+		if (it->second != item.src) {
+			if (reused_products.find(item.src) == reused_products.end()) {
+				std::cout << "Reused " << it->second << std::endl;
+				reused_products.insert({ item.src, {
+					it->second,
+					placements.find(it->second)->second,
+					item.transformation}
+					});
+			}
+			return;
 		}
 	}
-	T1.stop();
+	else {
+		first_product_for_geom_id.insert(it, { item.geom_reference, item.src });
+		// placements only need to be inserted once.
+		placements[item.src] = item.transformation.inverse();
+	}
 
-	union_collector.add_polyhedron(result);
-	per_product_collector.add_polyhedron(result);
+	product_geometries[item.src].emplace_back();
+	process_shape_item task(radius, minkowski_triangles_, padding_volume);
+	auto b = std::bind(std::move(task), item, std::ref(product_geometries[item.src].back()));
 
-	empty_ = false;
+	if (!threads_) {
+		b();
+	}
+	else {
+		bool placed = false;
+		while (!placed) {
+			for (auto& fu : threadpool_) {
+				if (!fu.valid()) {					
+					fu = std::async(std::launch::async, std::move(b));
+					placed = true;
+					break;
+				}
+			}
+			if (!placed) {
+				for (auto& fu : threadpool_) {
+					if (fu.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
+						try {
+							fu.get();
+						}
+						catch (std::exception& e) {
+							std::cerr << e.what() << std::endl;
+						}
+						catch (...) {
+							std::cerr << "unkown error" << std::endl;
+						}
+						fu = std::async(std::launch::async, std::move(b));
+						placed = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+	
 }
 
 namespace {
@@ -766,26 +898,6 @@ cgal_shape_t radius_execution_context::extract(const cgal_shape_t& input, extrac
 	return input_copy;
 }
 
-// Create a bounding box (six-faced Nef poly) around a CGAL Polyhedron
-
-CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::create_bounding_box(const cgal_shape_t & input) const {
-	// @todo we can probably use
-	// CGAL::Nef_polyhedron_3<Kernel_> nef(CGAL::Nef_polyhedron_3<Kernel_>::COMPLETE)
-	// Implementation detail: there is always an implicit box around the Nef, even when open or closed.
-	// Never mind: The Minkowski sum cannot operate on unbounded inputs...
-
-	// Create the complement of the Nef by subtracting from its bounding box,
-	// see: https://github.com/tudelft3d/ifc2citygml/blob/master/off2citygml/Minkowski.cpp#L23
-	auto bounding_box = CGAL::Polygon_mesh_processing::bbox(input);
-	Kernel_::Point_3 bbmin(bounding_box.xmin(), bounding_box.ymin(), bounding_box.zmin());
-	Kernel_::Point_3 bbmax(bounding_box.xmax(), bounding_box.ymax(), bounding_box.zmax());
-	Kernel_::Vector_3 d(radius, radius, radius);
-	bbmin = CGAL::ORIGIN + ((bbmin - CGAL::ORIGIN) - d);
-	bbmax = CGAL::ORIGIN + ((bbmax - CGAL::ORIGIN) + d);
-	cgal_shape_t poly_box = ifcopenshell::geometry::utils::create_cube(bbmin, bbmax);
-	return ifcopenshell::geometry::utils::create_nef_polyhedron(poly_box);
-}
-
 // Completes the boolean union, extracts exterior and erodes padding radius
 
 #include <CGAL/Surface_mesh_simplification/Edge_collapse_visitor_base.h>
@@ -851,13 +963,52 @@ struct My_visitor : SMS::Edge_collapse_visitor_base<CGAL::Polyhedron_3<T>>
 	Stats* stats;
 };
 
+void radius_execution_context::set_threads(size_t n) {
+	if (!threads_) {
+		threads_ = n;
+		threadpool_.resize(n);
+	}	
+}
+
 void radius_execution_context::finalize() {
-	{
-		auto T = timer::measure("nef_boolean_union");
-		// @todo spatial sorting?
-		boolean_result = union_collector.get_union();
-		T.stop();
+	for (auto& fu : threadpool_) {
+		if (fu.valid()) {
+			try {
+				fu.get();
+			}
+			catch (std::exception& e) {
+				std::cerr << e.what() << std::endl;
+			}
+			catch (...) {
+				std::cerr << "unkown error" << std::endl;
+			}
+		}
 	}
+
+	auto T = timer::measure("nef_boolean_union");
+
+	for (auto& p : product_geometries) {
+		// @todo This part can still be multithreaded
+		if (p.second.size() > 1) {
+			CGAL::Nef_nary_union_3<CGAL::Nef_polyhedron_3<Kernel_>> per_product_collector;
+			for (auto& r : p.second) {
+				per_product_collector.add_polyhedron(r);
+			}
+			p.second = { per_product_collector.get_union() };
+		}		
+		union_collector.add_polyhedron(p.second.front());
+	}
+
+	for (auto& p : reused_products) {
+		auto copy = product_geometries[p.second.target].front();
+		copy.transform(p.second.inverse);
+		copy.transform(p.second.own);
+		union_collector.add_polyhedron(copy);
+	}
+
+	// @todo spatial sorting?
+	boolean_result = union_collector.get_union();
+	T.stop();
 
 	if (no_erosion_) {
 		exterior = boolean_result;
@@ -889,7 +1040,19 @@ void radius_execution_context::finalize() {
 
 			CGAL::Polygon_mesh_processing::triangulate_faces(poly_simple);
 
+			poly_simple.normalize_border();
+			if (!poly_simple.is_valid(false, 1)) {
+				std::cerr << "invalid before clustering" << std::endl;
+				return;
+			}
+
 			cluster_vertices(poly_simple, ico_edge_length / 2.);
+
+			poly_simple.normalize_border();
+			if (!poly_simple.is_valid(false, 1)) {
+				std::cerr << "invalid after clustering" << std::endl;
+				return;
+			}
 
 			{
 				simple_obj_writer tmp_debug("debug-after-custering");
@@ -897,6 +1060,12 @@ void radius_execution_context::finalize() {
 			}
 
 			util::copy::polyhedron(polyhedron_exterior, poly_simple);
+
+			polyhedron_exterior.normalize_border();
+			if (!polyhedron_exterior.is_valid(false, 1)) {
+				std::cerr << "invalid after conversion" << std::endl;
+				return;
+			}
 			
 			/*
 			// SMS (again) does not really work, geometrical constraints not sattisfied

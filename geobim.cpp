@@ -60,6 +60,9 @@ int main(int argc, char** argv) {
 				.set(radius_settings::NO_EROSION, settings.no_erosion)
 				.set(radius_settings::SPHERE, settings.spherical_padding)));
 			first = false;
+			if (settings.threads) {
+				radius_contexts.back()->set_threads(*settings.threads);
+			}
 		}
 
 		for (auto& c : radius_contexts) {

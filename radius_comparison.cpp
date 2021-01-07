@@ -3,9 +3,11 @@
 #include "writer.h"
 #include <CGAL/minkowski_sum_3.h>
 
+CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t & input, double radius);
+
 radius_comparison::hollow_solid::hollow_solid(radius_execution_context & a, double d) {
 	D = d;
-	bbox = a.create_bounding_box(a.polyhedron_exterior);
+	bbox = create_bounding_box(a.polyhedron_exterior, a.radius);
 	complement = bbox - a.exterior;
 	complement.extract_regularization();
 	auto polycube = ifcopenshell::geometry::utils::create_cube(d);
