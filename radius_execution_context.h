@@ -69,6 +69,9 @@ struct radius_execution_context : public execution_context {
 	enum extract_component { INTERIOR, EXTERIOR, LARGEST_AREA, SECOND_LARGEST_AREA };
 	bool minkowski_triangles_, no_erosion_, empty_;
 
+	// @todo this sets ico_edge_length
+	CGAL::Nef_polyhedron_3<Kernel_> construct_padding_volume_(const boost::optional<double>& = boost::none, radius_settings = radius_settings());
+
 	boost::optional<size_t> threads_;
 
 	radius_execution_context(const std::string& radius, radius_settings=radius_settings());

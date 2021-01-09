@@ -60,7 +60,7 @@ namespace {
 		int n = CGAL::cluster_point_set(points, clusters_map, CGAL::parameters::neighbor_radius(r));
 		std::cout << n << " clusters" << std::endl;
 
-		std::vector<average_point<K>> new_points_accum(clusters.size());
+		std::vector<average_point<K>> new_points_accum(n);
 		for (auto& p : clusters) {
 			new_points_accum[p.second].add(p.first);
 		}
@@ -99,34 +99,49 @@ namespace {
 				std::cerr << "erasing" << std::endl;
 			}
 		}
+
+		std::ofstream fs2("points.txt");
+		fs2 << "[\n";
+		for (auto& p : new_points) {
+			fs2 << "[" << p.cartesian(0) << "," << p.cartesian(1) << "," << p.cartesian(2) << "],\n";
+		}
+		fs2.seekp(-3, std::ios_base::cur);
+		fs2 << "]";
+		fs2.close();
 		
-		// std::ofstream fs("debug.txt");
+		std::ofstream fs("debug.txt");
 
 		std::map<std::pair<size_t, size_t>, size_t> edge_use;
 		auto add_use = [&edge_use](size_t a, size_t b) {
 			if (a > b) std::swap(a, b);
 			edge_use[{a, b}]++;
 		};
-		// fs << "[\n";
+		fs << "[\n";
 		for (auto& tri : new_indices) {
-			// fs << "[" << tri[0] << "," << tri[1] << "," << tri[2] << "],\n";
+			fs << "[" << tri[0] << "," << tri[1] << "," << tri[2] << "],\n";
 			add_use(tri[0], tri[1]);
 			add_use(tri[1], tri[2]);
 			add_use(tri[2], tri[0]);
 		}
-		// fs << "]";
-		// fs.close();
+		fs.seekp(-3, std::ios_base::cur);
+		fs << "]";
+		fs.close();
 
 		for (auto& p : edge_use) {
 			if (p.second != 2) {
-				std::cerr << "non-manifold: " << p.first.first << " " << p.first.second;
-				// std::cin.get();
+				std::cerr << "non-manifold: " << p.first.first << " " << p.first.second << std::endl;
+				std::cerr << "attach debugger and press key" << std::endl;
+				std::cin.get();
 			}
 		}
 
 		std::cerr << "removed points: " << CGAL::Polygon_mesh_processing::remove_isolated_points_in_polygon_soup(new_points, new_indices) << std::endl;
 
-		std::cerr << "valid: " << CGAL::Polygon_mesh_processing::is_polygon_soup_a_polygon_mesh(new_indices) << std::endl;
+		auto v = CGAL::Polygon_mesh_processing::is_polygon_soup_a_polygon_mesh(new_indices);
+		std::cerr << "valid: " << v << std::endl;
+		if (!v) {
+			CGAL::Polygon_mesh_processing::is_polygon_soup_a_polygon_mesh(new_indices);
+		}
 
 		T new_poly;
 		CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(new_points, new_indices, new_poly);
@@ -154,93 +169,95 @@ radius_execution_context::radius_execution_context(const std::string& r, radius_
 	, no_erosion_(rs.get(radius_settings::NO_EROSION))
 	, empty_(false) // no longer relevant, bug fixed
 {
-	{
-		if (rs.get(radius_settings::SPHERE)) {
-			cgal_shape_t ico;
+	padding_volume = construct_padding_volume_(radius);
+	if (ENSURE_2ND_OP_NARROWER && rs.get(radius_settings::NARROWER)) {
+		double r2 = radius + 1e-7;
+		padding_volume_2 = construct_padding_volume_(r2);
+	}
+	else {
+		padding_volume_2 = padding_volume;
+	}
+}
+
+CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::construct_padding_volume_(const boost::optional<double>& R, radius_settings rs) {
+	double radius = R.get_value_or(this->radius);
+
+	if (rs.get(radius_settings::SPHERE)) {
+		cgal_shape_t ico;
 			
-			CGAL::make_icosahedron(ico, cgal_point_t(0, 0, 0), 1.0);
+		CGAL::make_icosahedron(ico, cgal_point_t(0, 0, 0), 1.0);
 
-			double ml = std::numeric_limits<double>::infinity();
+		double ml = std::numeric_limits<double>::infinity();
 			
-			// Take the edge centers and find minimal distance from origin.
-			// Or use vertex position
-			for (auto& e : edges(ico)) {
-				auto v1 = e.halfedge()->vertex();
-				auto v2 = e.opposite().halfedge()->vertex();
+		// Take the edge centers and find minimal distance from origin.
+		// Or use vertex position
+		for (auto& e : edges(ico)) {
+			auto v1 = e.halfedge()->vertex();
+			auto v2 = e.opposite().halfedge()->vertex();
 
-				double v1x = CGAL::to_double(v1->point().cartesian(0));
-				double v1y = CGAL::to_double(v1->point().cartesian(1));
-				double v1z = CGAL::to_double(v1->point().cartesian(2));
+			double v1x = CGAL::to_double(v1->point().cartesian(0));
+			double v1y = CGAL::to_double(v1->point().cartesian(1));
+			double v1z = CGAL::to_double(v1->point().cartesian(2));
 
-				double v2x = CGAL::to_double(v2->point().cartesian(0));
-				double v2y = CGAL::to_double(v2->point().cartesian(1));
-				double v2z = CGAL::to_double(v2->point().cartesian(2));
+			double v2x = CGAL::to_double(v2->point().cartesian(0));
+			double v2y = CGAL::to_double(v2->point().cartesian(1));
+			double v2z = CGAL::to_double(v2->point().cartesian(2));
 
 #ifdef ICO_EDGE_CENTRES
-				double vx = (v1x + v2x) / 2.;
-				double vy = (v1y + v2y) / 2.;
-				double vz = (v1z + v2z) / 2.;
+			double vx = (v1x + v2x) / 2.;
+			double vy = (v1y + v2y) / 2.;
+			double vz = (v1z + v2z) / 2.;
 
-				double l = std::sqrt(vx*vx + vy * vy + vz * vz);
-				if (l < ml) {
-					ml = l;
-				}
+			double l = std::sqrt(vx*vx + vy * vy + vz * vz);
+			if (l < ml) {
+				ml = l;
+			}
 #else
-				double l = std::sqrt(v1x*v1x + v1y * v1y + v1z * v1z);
-				if (l < ml) {
-					ml = l;
-				}
-				l = std::sqrt(v2x*v2x + v2y * v2y + v2z * v2z);
-				if (l < ml) {
-					ml = l;
-				}
+			double l = std::sqrt(v1x*v1x + v1y * v1y + v1z * v1z);
+			if (l < ml) {
+				ml = l;
+			}
+			l = std::sqrt(v2x*v2x + v2y * v2y + v2z * v2z);
+			if (l < ml) {
+				ml = l;
+			}
 #endif
-			}
-
-			// Divide the coordinates with the miminal distance
-			for (auto& v : vertices(ico)) {
-				v->point() = CGAL::ORIGIN + ((v->point() - CGAL::ORIGIN) * (radius / ml));
-			}
-
-			ico_edge_length = 10.;
-			// Now compute ico edge length, we use it later as a treshold for simplification
-			for (auto& e : edges(ico)) {
-				auto v1 = e.halfedge()->vertex();
-				auto v2 = e.opposite().halfedge()->vertex();
-
-				double v1x = CGAL::to_double(v1->point().cartesian(0));
-				double v1y = CGAL::to_double(v1->point().cartesian(1));
-				double v1z = CGAL::to_double(v1->point().cartesian(2));
-
-				double v2x = CGAL::to_double(v2->point().cartesian(0));
-				double v2y = CGAL::to_double(v2->point().cartesian(1));
-				double v2z = CGAL::to_double(v2->point().cartesian(2));
-
-				double vx = (v1x - v2x);
-				double vy = (v1y - v2y);
-				double vz = (v1z - v2z);
-
-				double l = std::sqrt(vx*vx + vy * vy + vz * vz);
-				if (l < ico_edge_length) {
-					ico_edge_length = l;
-				}
-			}
-
-			padding_volume = ifcopenshell::geometry::utils::create_nef_polyhedron(ico);
 		}
-		else {
-			auto polycube = ifcopenshell::geometry::utils::create_cube(radius);
-			padding_volume = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
+
+		// Divide the coordinates with the miminal distance
+		for (auto& v : vertices(ico)) {
+			v->point() = CGAL::ORIGIN + ((v->point() - CGAL::ORIGIN) * (radius / ml));
 		}
+
+		ico_edge_length = 10.;
+		// Now compute ico edge length, we use it later as a treshold for simplification
+		for (auto& e : edges(ico)) {
+			auto v1 = e.halfedge()->vertex();
+			auto v2 = e.opposite().halfedge()->vertex();
+
+			double v1x = CGAL::to_double(v1->point().cartesian(0));
+			double v1y = CGAL::to_double(v1->point().cartesian(1));
+			double v1z = CGAL::to_double(v1->point().cartesian(2));
+
+			double v2x = CGAL::to_double(v2->point().cartesian(0));
+			double v2y = CGAL::to_double(v2->point().cartesian(1));
+			double v2z = CGAL::to_double(v2->point().cartesian(2));
+
+			double vx = (v1x - v2x);
+			double vy = (v1y - v2y);
+			double vz = (v1z - v2z);
+
+			double l = std::sqrt(vx*vx + vy * vy + vz * vz);
+			if (l < ico_edge_length) {
+				ico_edge_length = l;
+			}
+		}
+
+		return ifcopenshell::geometry::utils::create_nef_polyhedron(ico);
 	}
-
-	if (ENSURE_2ND_OP_NARROWER && rs.get(radius_settings::NARROWER)) {
-		// double r2 = boost::math::float_advance(r, +5);
-		double r2 = radius + 1e-7;
-		auto polycube = ifcopenshell::geometry::utils::create_cube(r2);
-		padding_volume_2 = ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
-	} else {
-		padding_volume_2 = padding_volume;
+	else {
+		auto polycube = ifcopenshell::geometry::utils::create_cube(radius);
+		return ifcopenshell::geometry::utils::create_nef_polyhedron(polycube);
 	}
 }
 
@@ -722,6 +739,9 @@ public:
 				result -= temp;
 			}
 		}
+
+		result.extract_regularization();
+		
 		T1.stop();
 	}
 };
@@ -748,7 +768,7 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	}
 
 	product_geometries[item.src].emplace_back();
-	process_shape_item task(radius, minkowski_triangles_, padding_volume);
+	process_shape_item task(radius, minkowski_triangles_, construct_padding_volume_());
 	auto b = std::bind(std::move(task), item, std::ref(product_geometries[item.src].back()));
 
 	if (!threads_) {
@@ -995,6 +1015,8 @@ void radius_execution_context::finalize() {
 				per_product_collector.add_polyhedron(r);
 			}
 			p.second = { per_product_collector.get_union() };
+			// @todo is this necessary when using the n-ary op?
+			p.second.front().extract_regularization();
 		}		
 		union_collector.add_polyhedron(p.second.front());
 	}
@@ -1008,6 +1030,7 @@ void radius_execution_context::finalize() {
 
 	// @todo spatial sorting?
 	boolean_result = union_collector.get_union();
+	boolean_result.extract_regularization();
 	T.stop();
 
 	if (no_erosion_) {
