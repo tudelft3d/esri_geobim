@@ -70,7 +70,7 @@ struct radius_execution_context : public execution_context {
 	bool minkowski_triangles_, no_erosion_, empty_;
 
 	// @todo this sets ico_edge_length
-	CGAL::Nef_polyhedron_3<Kernel_> construct_padding_volume_(const boost::optional<double>& = boost::none, radius_settings = radius_settings());
+	CGAL::Nef_polyhedron_3<Kernel_> construct_padding_volume_(const boost::optional<double>& = boost::none);
 
 	boost::optional<size_t> threads_;
 

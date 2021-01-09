@@ -18,7 +18,7 @@ struct shape_callback_item {
 	boost::optional<Eigen::Vector3d> wall_direction;
 	std::list<shape_callback_item*> openings;
 
-	bool to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef);
+	bool to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef, bool copy=false);
 };
 
 // Prototype of a context to which processed shapes will be fed

@@ -10,19 +10,20 @@
 
 // #define USE_COPY
 
-bool shape_callback_item::to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef) {
+bool shape_callback_item::to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef, bool make_copy) {
 	auto T1 = timer::measure("ifc_element_to_nef");
 
 	decltype(polyhedron)* input;
-#ifdef USE_COPY
-	decltype(polyhedron) copy;
-	// this appears to help with multithreading
-	// @todo do this conditionally only when using multiple threads
-	CGAL::copy_face_graph(polyhedron, copy);
-	input = &copy;
-#else
-	input = &polyhedron;
-#endif
+
+	if (make_copy) {
+		decltype(polyhedron) copy;
+		// this appears to help with multithreading
+		CGAL::copy_face_graph(polyhedron, copy);
+		input = &copy;
+	} else {
+		input = &polyhedron;
+	}
+
 
 	nef = ifcopenshell::geometry::utils::create_nef_polyhedron(*input);
 	T1.stop();

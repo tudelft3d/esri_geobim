@@ -57,6 +57,8 @@ namespace {
 		std::map<P, size_t> clusters;
 		boost::associative_property_map<std::map<P, size_t>> clusters_map(clusters);
 
+		std::cout << "Clustering with radius " << r << std::endl;
+
 		int n = CGAL::cluster_point_set(points, clusters_map, CGAL::parameters::neighbor_radius(r));
 		std::cout << n << " clusters" << std::endl;
 
@@ -179,10 +181,10 @@ radius_execution_context::radius_execution_context(const std::string& r, radius_
 	}
 }
 
-CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::construct_padding_volume_(const boost::optional<double>& R, radius_settings rs) {
+CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::construct_padding_volume_(const boost::optional<double>& R) {
 	double radius = R.get_value_or(this->radius);
 
-	if (rs.get(radius_settings::SPHERE)) {
+	if (settings_.get(radius_settings::SPHERE)) {
 		cgal_shape_t ico;
 			
 		CGAL::make_icosahedron(ico, cgal_point_t(0, 0, 0), 1.0);
@@ -505,17 +507,20 @@ CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t & input, 
 
 class process_shape_item {
 	double radius;
-	bool minkowski_triangles_;
+	bool minkowski_triangles_, threaded_;
 	CGAL::Nef_polyhedron_3<Kernel_> padding_volume;
 public:
 
-	process_shape_item(double r, bool mintri, CGAL::Nef_polyhedron_3<Kernel_> pv)
+	process_shape_item(double r, bool mintri, bool threaded, CGAL::Nef_polyhedron_3<Kernel_> pv)
 		: radius(r)
 		, minkowski_triangles_(mintri)
+		, threaded_(threaded)
 		, padding_volume(pv)
 	{}
 	
-	void operator()(shape_callback_item& item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+	void operator()(shape_callback_item* item_ptr, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+		auto& item = *item_ptr;
+
 		CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
 		util::copy::polyhedron(poly_triangulated, item.polyhedron);
 		if (!CGAL::Polygon_mesh_processing::triangulate_faces(poly_triangulated)) {
@@ -532,7 +537,7 @@ public:
 		CGAL::Nef_polyhedron_3<Kernel_> item_nef;
 		bool item_nef_succeeded = false;
 		if (self_intersections.empty()) {
-			if (!(item_nef_succeeded = item.to_nef_polyhedron(item_nef))) {
+			if (!(item_nef_succeeded = item.to_nef_polyhedron(item_nef, threaded_))) {
 				std::cerr << "no nef for product" << std::endl;
 			}
 		}
@@ -715,7 +720,7 @@ public:
 
 				auto bounds = create_bounding_box(op->polyhedron, radius);
 				CGAL::Nef_polyhedron_3<Kernel_> opening_nef;
-				if (!op->to_nef_polyhedron(opening_nef)) {
+				if (!op->to_nef_polyhedron(opening_nef, threaded_)) {
 					std::cerr << "no nef for opening" << std::endl;
 					continue;
 				}
@@ -768,18 +773,18 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	}
 
 	product_geometries[item.src].emplace_back();
-	process_shape_item task(radius, minkowski_triangles_, construct_padding_volume_());
-	auto b = std::bind(std::move(task), item, std::ref(product_geometries[item.src].back()));
+	auto result_nef = std::ref(product_geometries[item.src].back());
+	process_shape_item task(radius, minkowski_triangles_, (bool) threads_, construct_padding_volume_());
 
 	if (!threads_) {
-		b();
+		task(&item, result_nef);
 	}
 	else {
 		bool placed = false;
 		while (!placed) {
 			for (auto& fu : threadpool_) {
 				if (!fu.valid()) {					
-					fu = std::async(std::launch::async, std::move(b));
+					fu = std::async(std::launch::async, std::move(task), &item, result_nef);
 					placed = true;
 					break;
 				}
@@ -796,7 +801,7 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 						catch (...) {
 							std::cerr << "unkown error" << std::endl;
 						}
-						fu = std::async(std::launch::async, std::move(b));
+						fu = std::async(std::launch::async, std::move(task), &item, result_nef);
 						placed = true;
 						break;
 					}
@@ -1016,7 +1021,7 @@ void radius_execution_context::finalize() {
 			}
 			p.second = { per_product_collector.get_union() };
 			// @todo is this necessary when using the n-ary op?
-			p.second.front().extract_regularization();
+			// p.second.front().extract_regularization();
 		}		
 		union_collector.add_polyhedron(p.second.front());
 	}
@@ -1030,7 +1035,7 @@ void radius_execution_context::finalize() {
 
 	// @todo spatial sorting?
 	boolean_result = union_collector.get_union();
-	boolean_result.extract_regularization();
+	// boolean_result.extract_regularization();
 	T.stop();
 
 	if (no_erosion_) {
