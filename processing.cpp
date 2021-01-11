@@ -15,7 +15,7 @@ bool shape_callback_item::to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef
 
 	decltype(polyhedron)* input;
 
-	if (make_copy) {
+	if (false && make_copy) {
 		decltype(polyhedron) copy;
 		// this appears to help with multithreading
 		CGAL::copy_face_graph(polyhedron, copy);

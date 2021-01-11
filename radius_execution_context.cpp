@@ -518,8 +518,12 @@ public:
 		, padding_volume(pv)
 	{}
 	
+#if 0
 	void operator()(shape_callback_item* item_ptr, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 		auto& item = *item_ptr;
+#else
+	void operator()(shape_callback_item item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+#endif
 
 		CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
 		util::copy::polyhedron(poly_triangulated, item.polyhedron);
@@ -775,41 +779,7 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	product_geometries[item.src].emplace_back();
 	auto result_nef = std::ref(product_geometries[item.src].back());
 	process_shape_item task(radius, minkowski_triangles_, (bool) threads_, construct_padding_volume_());
-
-	if (!threads_) {
-		task(&item, result_nef);
-	}
-	else {
-		bool placed = false;
-		while (!placed) {
-			for (auto& fu : threadpool_) {
-				if (!fu.valid()) {					
-					fu = std::async(std::launch::async, std::move(task), &item, result_nef);
-					placed = true;
-					break;
-				}
-			}
-			if (!placed) {
-				for (auto& fu : threadpool_) {
-					if (fu.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-						try {
-							fu.get();
-						}
-						catch (std::exception& e) {
-							std::cerr << e.what() << std::endl;
-						}
-						catch (...) {
-							std::cerr << "unkown error" << std::endl;
-						}
-						fu = std::async(std::launch::async, std::move(task), &item, result_nef);
-						placed = true;
-						break;
-					}
-				}
-			}
-		}
-	}
-	
+	schedule_task(task, item, result_nef);
 }
 
 namespace {
@@ -995,34 +965,36 @@ void radius_execution_context::set_threads(size_t n) {
 	}	
 }
 
-void radius_execution_context::finalize() {
-	for (auto& fu : threadpool_) {
-		if (fu.valid()) {
-			try {
-				fu.get();
-			}
-			catch (std::exception& e) {
-				std::cerr << e.what() << std::endl;
-			}
-			catch (...) {
-				std::cerr << "unkown error" << std::endl;
-			}
+namespace {
+	void fold_list(radius_execution_context::result_list_t& li) {
+		CGAL::Nef_nary_union_3<CGAL::Nef_polyhedron_3<Kernel_>> per_product_collector;
+		for (auto& r : li) {
+			per_product_collector.add_polyhedron(r);
 		}
+		li.clear();
+		li.push_back(per_product_collector.get_union());
+		// @todo is this necessary when using the n-ary op?
+		// p.second.front().extract_regularization();
 	}
+}
+
+void radius_execution_context::finalize() {
+	wait();
 
 	auto T = timer::measure("nef_boolean_union");
 
 	for (auto& p : product_geometries) {
 		// @todo This part can still be multithreaded
 		if (p.second.size() > 1) {
-			CGAL::Nef_nary_union_3<CGAL::Nef_polyhedron_3<Kernel_>> per_product_collector;
-			for (auto& r : p.second) {
-				per_product_collector.add_polyhedron(r);
-			}
-			p.second = { per_product_collector.get_union() };
-			// @todo is this necessary when using the n-ary op?
-			// p.second.front().extract_regularization();
-		}		
+			// schedule_task(fold_list, p.second);		
+			fold_list(p.second);
+		}
+	}
+
+	// wait();
+
+	// @todo spatial sort, distribute over n threads.
+	for (auto& p : product_geometries) {
 		union_collector.add_polyhedron(p.second.front());
 	}
 
