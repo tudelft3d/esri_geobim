@@ -114,59 +114,6 @@ struct radius_execution_context : public execution_context {
 	void finalize();
 
 	bool empty() const { return empty_; }
-
-	template <typename T, typename... Ts>
-	void schedule_task(T&& task, Ts&&... args) {
-		if (!threads_) {
-			task(std::forward<Ts>(args)...);
-		}
-		else {
-			bool placed = false;
-			while (!placed) {
-				for (auto& fu : threadpool_) {
-					if (!fu.valid()) {
-						fu = std::async(std::launch::async, std::move(task), std::forward<Ts>(args)...);
-						placed = true;
-						break;
-					}
-				}
-				if (!placed) {
-					for (auto& fu : threadpool_) {
-						if (fu.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
-							try {
-								fu.get();
-							}
-							catch (std::exception& e) {
-								std::cerr << e.what() << std::endl;
-							}
-							catch (...) {
-								std::cerr << "unkown error" << std::endl;
-							}
-							fu = std::async(std::launch::async, std::move(task), std::forward<Ts>(args)...);
-							placed = true;
-							break;
-						}
-					}
-				}
-			}
-		}
-	}
-
-	void wait() {
-		for (auto& fu : threadpool_) {
-			if (fu.valid()) {
-				try {
-					fu.get();
-				}
-				catch (std::exception& e) {
-					std::cerr << e.what() << std::endl;
-				}
-				catch (...) {
-					std::cerr << "unkown error" << std::endl;
-				}
-			}
-		}
-	}
 };
 
 #endif
