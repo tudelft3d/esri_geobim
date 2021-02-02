@@ -518,9 +518,12 @@ public:
 		, padding_volume(pv)
 	{}
 	
-	void operator()(shape_callback_item* item_ptr, CGAL::Nef_polyhedron_3<Kernel_>* result_) {
+#if 0
+	void operator()(shape_callback_item* item_ptr, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 		auto& item = *item_ptr;
-		auto& result = *result_;
+#else
+	void operator()(shape_callback_item item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+#endif
 
 		CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
 		util::copy::polyhedron(poly_triangulated, item.polyhedron);
@@ -779,14 +782,14 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	process_shape_item task(radius, minkowski_triangles_, (bool) threads_, construct_padding_volume_());
 
 	if (!threads_) {
-		task(&item, result_nef);
+		task(item, result_nef);
 	}
 	else {
 		bool placed = false;
 		while (!placed) {
 			for (auto& fu : threadpool_) {
 				if (!fu.valid()) {					
-					fu = std::async(std::launch::async, std::move(task), &item, result_nef);
+					fu = std::async(std::launch::async, std::move(task), item, result_nef);
 					placed = true;
 					break;
 				}
@@ -803,7 +806,7 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 						catch (...) {
 							std::cerr << "unkown error" << std::endl;
 						}
-						fu = std::async(std::launch::async, std::move(task), &item, result_nef);
+						fu = std::async(std::launch::async, std::move(task), item, result_nef);
 						placed = true;
 						break;
 					}

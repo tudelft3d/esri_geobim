@@ -14,12 +14,13 @@ bool shape_callback_item::to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef
 	auto T1 = timer::measure("ifc_element_to_nef");
 
 	decltype(polyhedron)* input;
+	std::unique_ptr<decltype(polyhedron)> copy;
 
-	if (make_copy) {
-		decltype(polyhedron) copy;
+	if (false && make_copy) {
+		copy = std::make_unique<decltype(polyhedron)>();
 		// this appears to help with multithreading
-		CGAL::copy_face_graph(polyhedron, copy);
-		input = &copy;
+		CGAL::copy_face_graph(polyhedron, *copy);
+		input = &*copy;
 	} else {
 		input = &polyhedron;
 	}
