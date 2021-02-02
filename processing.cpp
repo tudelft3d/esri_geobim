@@ -175,6 +175,7 @@ int process_geometries::operator()(const std::function<void(shape_callback_item&
 					geom_object->product(),
 					geom_object->guid(),
 					geom_object->type(),
+					geom_object->geometry().id(),
 					std::to_string(g.ItemId()),
 					element_transformation,
 					s,
@@ -185,7 +186,7 @@ int process_geometries::operator()(const std::function<void(shape_callback_item&
 
 				fn(item);
 
-				std::cout << "Processed: " << geom_object->product()->data().toString() << " part: #" << geom_object->geometry().id() << std::endl;
+				std::cout << "Processed: " << geom_object->product()->data().toString() << " part: #" << g.ItemId() << std::endl;
 			}
 
 			std::cout << "Progress: " << context_iterator.progress() << std::endl;

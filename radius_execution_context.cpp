@@ -408,6 +408,23 @@ namespace {
 
 void process_shape_item(shape_callback_item& item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 
+// Create a bounding box (six-faced Nef poly) around a CGAL Polyhedron
+CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t & input, double radius) {
+	// @todo we can probably use
+	// CGAL::Nef_polyhedron_3<Kernel_> nef(CGAL::Nef_polyhedron_3<Kernel_>::COMPLETE)
+	// Implementation detail: there is always an implicit box around the Nef, even when open or closed.
+	// Never mind: The Minkowski sum cannot operate on unbounded inputs...
+
+	// Create the complement of the Nef by subtracting from its bounding box,
+	// see: https://github.com/tudelft3d/ifc2citygml/blob/master/off2citygml/Minkowski.cpp#L23
+	auto bounding_box = CGAL::Polygon_mesh_processing::bbox(input);
+	Kernel_::Point_3 bbmin(bounding_box.xmin(), bounding_box.ymin(), bounding_box.zmin());
+	Kernel_::Point_3 bbmax(bounding_box.xmax(), bounding_box.ymax(), bounding_box.zmax());
+	Kernel_::Vector_3 d(radius, radius, radius);
+	bbmin = CGAL::ORIGIN + ((bbmin - CGAL::ORIGIN) - d);
+	bbmax = CGAL::ORIGIN + ((bbmax - CGAL::ORIGIN) + d);
+	cgal_shape_t poly_box = ifcopenshell::geometry::utils::create_cube(bbmin, bbmax);
+	return ifcopenshell::geometry::utils::create_nef_polyhedron(poly_box);
 }
 
 void radius_execution_context::operator()(shape_callback_item& item) {
