@@ -777,8 +777,8 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	}
 
 	product_geometries[item.src].emplace_back();
-	// auto result_nef = std::ref(product_geometries[item.src].back());
-	auto result_nef = &product_geometries[item.src].back();
+	auto result_nef = std::ref(product_geometries[item.src].back());
+	// auto result_nef = &product_geometries[item.src].back();
 	process_shape_item task(radius, minkowski_triangles_, (bool) threads_, construct_padding_volume_());
 
 	if (!threads_) {
