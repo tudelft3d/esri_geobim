@@ -193,7 +193,7 @@ CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::construct_padding_volu
 			
 		// Take the edge centers and find minimal distance from origin.
 		// Or use vertex position
-		for (auto& e : edges(ico)) {
+		for (auto e : edges(ico)) {
 			auto v1 = e.halfedge()->vertex();
 			auto v2 = e.opposite().halfedge()->vertex();
 
@@ -233,7 +233,7 @@ CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::construct_padding_volu
 
 		ico_edge_length = 10.;
 		// Now compute ico edge length, we use it later as a treshold for simplification
-		for (auto& e : edges(ico)) {
+		for (auto e : edges(ico)) {
 			auto v1 = e.halfedge()->vertex();
 			auto v2 = e.opposite().halfedge()->vertex();
 
@@ -518,8 +518,9 @@ public:
 		, padding_volume(pv)
 	{}
 	
-	void operator()(shape_callback_item* item_ptr, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+	void operator()(shape_callback_item* item_ptr, CGAL::Nef_polyhedron_3<Kernel_>* result_) {
 		auto& item = *item_ptr;
+		auto& result = *result_;
 
 		CGAL::Polyhedron_3<CGAL::Epick> poly_triangulated;
 		util::copy::polyhedron(poly_triangulated, item.polyhedron);
@@ -773,7 +774,8 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 	}
 
 	product_geometries[item.src].emplace_back();
-	auto result_nef = std::ref(product_geometries[item.src].back());
+	// auto result_nef = std::ref(product_geometries[item.src].back());
+	auto result_nef = &product_geometries[item.src].back();
 	process_shape_item task(radius, minkowski_triangles_, (bool) threads_, construct_padding_volume_());
 
 	if (!threads_) {
@@ -923,70 +925,8 @@ cgal_shape_t radius_execution_context::extract(const cgal_shape_t& input, extrac
 	return input_copy;
 }
 
-// Completes the boolean union, extracts exterior and erodes padding radius
 
 #include <CGAL/Surface_mesh_simplification/Edge_collapse_visitor_base.h>
-
-// The following is a Visitor that keeps track of the simplification process.
-// In this example the progress is printed real-time and a few statistics are
-// recorded (and printed in the end).
-//
-struct Stats
-{
-	std::size_t collected = 0;
-	std::size_t processed = 0;
-	std::size_t collapsed = 0;
-	std::size_t non_collapsable = 0;
-	std::size_t cost_uncomputable = 0;
-	std::size_t placement_uncomputable = 0;
-};
-
-template <typename T>
-struct My_visitor : SMS::Edge_collapse_visitor_base<CGAL::Polyhedron_3<T>>
-{
-	My_visitor(Stats* s) : stats(s) {}
-	// Called during the collecting phase for each edge collected.
-	void OnCollected(const Profile&, const boost::optional<double>&)
-	{
-		++(stats->collected);
-		std::cerr << "\rEdges collected: " << stats->collected << std::flush;
-	}
-	// Called during the processing phase for each edge selected.
-	// If cost is absent the edge won't be collapsed.
-	void OnSelected(const Profile&,
-		boost::optional<double> cost,
-		std::size_t initial,
-		std::size_t current)
-	{
-		++(stats->processed);
-		if (!cost)
-			++(stats->cost_uncomputable);
-		if (current == initial)
-			std::cerr << "\n" << std::flush;
-		std::cerr << "\r" << current << std::flush;
-	}
-	// Called during the processing phase for each edge being collapsed.
-	// If placement is absent the edge is left uncollapsed.
-	void OnCollapsing(const Profile&,
-		boost::optional<Point> placement)
-	{
-		if (!placement)
-			++(stats->placement_uncomputable);
-	}
-	// Called for each edge which failed the so called link-condition,
-	// that is, which cannot be collapsed because doing so would
-	// turn the surface mesh into a non-manifold.
-	void OnNonCollapsable(const Profile&)
-	{
-		++(stats->non_collapsable);
-	}
-	// Called after each edge has been collapsed
-	void OnCollapsed(const Profile&, vertex_descriptor)
-	{
-		++(stats->collapsed);
-	}
-	Stats* stats;
-};
 
 void radius_execution_context::set_threads(size_t n) {
 	if (!threads_) {
@@ -995,6 +935,7 @@ void radius_execution_context::set_threads(size_t n) {
 	}	
 }
 
+// Completes the boolean union, extracts exterior and erodes padding radius
 void radius_execution_context::finalize() {
 	for (auto& fu : threadpool_) {
 		if (fu.valid()) {
