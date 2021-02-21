@@ -21,6 +21,7 @@ struct geobim_settings {
 	boost::optional<std::set<std::string>> entity_names;
 	bool entity_names_included;
 	std::vector<IfcParse::IfcFile*> file;
+	boost::optional<size_t> threads;
 };
 
 // Parse the command line settings and do basic initialization

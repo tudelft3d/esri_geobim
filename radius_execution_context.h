@@ -58,12 +58,6 @@ struct radius_settings : std::bitset<4> {
 	}
 };
 
-namespace {
-	void process_shape_item(shape_callback_item& item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
-
-	}
-}
-
 // State (polyhedra mostly) that are relevant only for one radius
 struct radius_execution_context : public execution_context {
 	radius_settings settings_;
@@ -75,7 +69,7 @@ struct radius_execution_context : public execution_context {
 	enum extract_component { INTERIOR, EXTERIOR, LARGEST_AREA, SECOND_LARGEST_AREA };
 	bool minkowski_triangles_, no_erosion_, empty_;
 
-	boost::optional<size_t> threads;
+	boost::optional<size_t> threads_;
 
 	radius_execution_context(const std::string& radius, radius_settings=radius_settings());
 	radius_execution_context(const radius_execution_context&) = delete;
@@ -87,18 +81,20 @@ struct radius_execution_context : public execution_context {
 	lazy_nary_union<CGAL::Nef_polyhedron_3<Kernel_> > per_product_collector;
 	cgal_placement_t last_place;
 
+	std::vector< std::future<void> > threadpool_;
+
+	void set_threads(size_t n);
+	
 	struct geometry_reference {
+		IfcUtil::IfcBaseEntity* target;
 		cgal_placement_t inverse, own;
 	};
 	typedef std::list< CGAL::Nef_polyhedron_3<Kernel_> > result_list_t;
 
-
-	std::vector< std::future<void> > threadpool_;
-	// this is a mapping from Geometry::ItemId / shape_item::geom_ref
-	std::map<std::string, geometry_reference> reused_geometries;
-	result_list_t results;
-	// This is a multimap as a an product can hold multiple representation items
-	std::multimap<IfcUtil::IfcBaseEntity*, typename result_list_t::const_iterator> src_result;
+	std::map<std::string, IfcUtil::IfcBaseEntity*> first_product_for_geom_id;
+	std::map<IfcUtil::IfcBaseEntity*, geometry_reference> reused_products;
+	std::map<IfcUtil::IfcBaseEntity*, cgal_placement_t> placements;
+	std::map<IfcUtil::IfcBaseEntity*, result_list_t> product_geometries;
 
 	// + map for reused items
 	// + finalize() does insertion in n-ary_bool
@@ -109,7 +105,7 @@ struct radius_execution_context : public execution_context {
 	void extract_in_place(cgal_shape_t& input, extract_component component) const;
 
 	// Create a bounding box (six-faced Nef poly) around a CGAL Polyhedron
-	CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t& input) const;
+	// CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t& input) const;
 
 	// Completes the boolean union, extracts exterior and erodes padding radius
 	void finalize();
