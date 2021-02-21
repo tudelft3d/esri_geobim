@@ -16,7 +16,7 @@ bool shape_callback_item::to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef
 	decltype(polyhedron)* input;
 	std::unique_ptr<decltype(polyhedron)> copy;
 
-	if (false && make_copy) {
+	if (make_copy) {
 		copy = std::make_unique<decltype(polyhedron)>();
 		// this appears to help with multithreading
 		CGAL::copy_face_graph(polyhedron, *copy);
@@ -37,9 +37,9 @@ bool shape_callback_item::to_nef_polyhedron(CGAL::Nef_polyhedron_3<Kernel_>& nef
 	return true;
 }
 
-void debug_writer::operator()(shape_callback_item& item) {
-	simple_obj_writer obj("debug-" + boost::lexical_cast<std::string>(item.src->data().id()));
-	obj(nullptr, item.polyhedron.facets_begin(), item.polyhedron.facets_end());
+void debug_writer::operator()(shape_callback_item* item) {
+	simple_obj_writer obj("debug-" + boost::lexical_cast<std::string>(item->src->data().id()));
+	obj(nullptr, item->polyhedron.facets_begin(), item->polyhedron.facets_end());
 }
 
 // Interprets IFC geometries by means of IfcOpenShell CGAL and
@@ -49,12 +49,13 @@ process_geometries::process_geometries(geobim_settings& s)
 {}
 
 process_geometries::~process_geometries() {
+	std::cout << "~process_geometries()" << std::endl;
 	for (auto& x : iterators) {
 		delete x;
 	}
 }
 
-int process_geometries::operator()(const std::function<void(shape_callback_item&)>& fn) {
+int process_geometries::operator()(const std::function<void(shape_callback_item*)>& fn) {
 	// Capture all openings beforehand, they are later assigned to the
 	// building elements.
 	auto opening_settings = settings;
@@ -189,7 +190,7 @@ int process_geometries::operator()(const std::function<void(shape_callback_item&
 					opt_style = &g.Style();
 				}
 
-				shape_callback_item item{
+				shape_callback_item* item = new shape_callback_item{
 					geom_object->product(),
 					geom_object->guid(),
 					geom_object->type(),

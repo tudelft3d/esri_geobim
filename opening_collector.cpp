@@ -22,10 +22,10 @@ opening_collector::opening_collector(const std::vector<IfcParse::IfcFile*>& fs) 
 	}
 }
 
-void opening_collector::operator()(shape_callback_item& item) {
-	auto opit = opening_to_elem.find(item.src);
+void opening_collector::operator()(shape_callback_item* item) {
+	auto opit = opening_to_elem.find(item->src);
 	if (opit != opening_to_elem.end()) {
 		list.push_back(item);
-		map.insert({ opit->second, &list.back() });
+		map.insert({ opit->second, list.back() });
 	}
 }

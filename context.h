@@ -23,7 +23,7 @@ struct shape_callback_item {
 
 // Prototype of a context to which processed shapes will be fed
 struct execution_context {
-	virtual void operator()(shape_callback_item&) = 0;
+	virtual void operator()(shape_callback_item*) = 0;
 };
 
 #endif

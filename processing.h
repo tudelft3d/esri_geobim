@@ -39,14 +39,14 @@ struct item_info {
 };
 
 struct debug_writer : public execution_context {
-	void operator()(shape_callback_item& item);
+	void operator()(shape_callback_item* item);
 };
 
 // An execution context that stores processed items from the file.
 struct capturing_execution_context : public execution_context {
-	std::list<shape_callback_item> items;
+	std::list<shape_callback_item*> items;
 
-	void operator()(shape_callback_item& item) {
+	void operator()(shape_callback_item* item) {
 		items.push_back(item);
 	}
 };
@@ -55,7 +55,7 @@ struct capturing_execution_context : public execution_context {
 struct shape_callback {
 	std::vector<execution_context*> contexts;
 
-	void operator()(shape_callback_item& item) {
+	void operator()(shape_callback_item* item) {
 		for (auto& c : contexts) {
 			(*c)(item);
 		}
@@ -71,7 +71,7 @@ struct process_geometries {
 
 	process_geometries(geobim_settings&);
 	~process_geometries();
-	int operator()(const std::function<void(shape_callback_item&)>&);
+	int operator()(const std::function<void(shape_callback_item*)>&);
 };
 
 #endif

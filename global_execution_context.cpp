@@ -77,20 +77,20 @@ typename global_execution_context<TreeKernel>::segmentation_return_type global_e
 }
 
 template<typename TreeKernel>
-void global_execution_context<TreeKernel>::operator()(shape_callback_item& item) {
-	rgb* diffuse = item.style ? new rgb(item.style->diffuse.ccomponents()) : (rgb*) nullptr;
+void global_execution_context<TreeKernel>::operator()(shape_callback_item* item) {
+	rgb* diffuse = item->style ? new rgb(item->style->diffuse.ccomponents()) : (rgb*) nullptr;
 	item_info* info = new item_info{
-		item.src->declaration().name(),
-		item.src->get_value<std::string>("GlobalId"),
+		item->src->declaration().name(),
+		item->src->get_value<std::string>("GlobalId"),
 		diffuse
 	};
 	infos.push_back(info);
 
 	TreeShapeType tree_polyhedron;
-	util::copy::polyhedron(tree_polyhedron, item.polyhedron);
+	util::copy::polyhedron(tree_polyhedron, item->polyhedron);
 
 	typename TreeKernel::Aff_transformation_3 transformation;
-	util::copy::transformation(transformation, item.transformation);
+	util::copy::transformation(transformation, item->transformation);
 
 	std::transform(
 		tree_polyhedron.points_begin(), tree_polyhedron.points_end(),

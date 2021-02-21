@@ -1,5 +1,3 @@
-// #define CGAL_SURFACE_SIMPLIFICATION_ENABLE_TRACE
-
 #include "radius_execution_context.h"
 #include "writer.h"
 
@@ -46,7 +44,7 @@ namespace {
 
 	// @todo this should not be based on euclidean distance, but rather distance over edge/face as it will now close holes which is not the intention
 	template <typename T>
-	void cluster_vertices(T& s, double r) {
+	bool cluster_vertices(T& s, double r) {
 		typedef typename T::Traits::Kernel K;
 		typedef CGAL::Point_3<K> P;
 
@@ -132,6 +130,7 @@ namespace {
 		for (auto& p : edge_use) {
 			if (p.second != 2) {
 				std::cerr << "non-manifold: " << p.first.first << " " << p.first.second << std::endl;
+				return false;
 				std::cerr << "attach debugger and press key" << std::endl;
 				std::cin.get();
 			}
@@ -160,6 +159,8 @@ namespace {
 		*/
 
 		s = new_poly;
+		
+		return true;
 	}
 }
 
@@ -171,6 +172,7 @@ radius_execution_context::radius_execution_context(const std::string& r, radius_
 	, no_erosion_(rs.get(radius_settings::NO_EROSION))
 	, empty_(false) // no longer relevant, bug fixed
 {
+	/*
 	padding_volume = construct_padding_volume_(radius);
 	if (ENSURE_2ND_OP_NARROWER && rs.get(radius_settings::NARROWER)) {
 		double r2 = radius + 1e-7;
@@ -179,6 +181,7 @@ radius_execution_context::radius_execution_context(const std::string& r, radius_
 	else {
 		padding_volume_2 = padding_volume;
 	}
+	*/
 }
 
 CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::construct_padding_volume_(const boost::optional<double>& R) {
@@ -508,19 +511,20 @@ CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t & input, 
 class process_shape_item {
 	double radius;
 	bool minkowski_triangles_, threaded_;
-	CGAL::Nef_polyhedron_3<Kernel_> padding_volume;
 public:
 
-	process_shape_item(double r, bool mintri, bool threaded, CGAL::Nef_polyhedron_3<Kernel_> pv)
+	process_shape_item(double r, bool mintri, bool threaded)
 		: radius(r)
 		, minkowski_triangles_(mintri)
 		, threaded_(threaded)
-		, padding_volume(pv)
 	{}
 	
-#if 0
-	void operator()(shape_callback_item* item_ptr, CGAL::Nef_polyhedron_3<Kernel_>& result) {
+#if 1
+	void operator()(shape_callback_item* item_ptr, CGAL::Nef_polyhedron_3<Kernel_>* result_ptr, CGAL::Nef_polyhedron_3<Kernel_>* padding_volume_, CGAL::Nef_polyhedron_3<Kernel_>* padding_volume_2_) {
 		auto& item = *item_ptr;
+		auto& result = *result_ptr;
+		auto& padding_volume = *padding_volume_;
+		auto& padding_volume_2 = *padding_volume_2_;
 #else
 	void operator()(shape_callback_item item, CGAL::Nef_polyhedron_3<Kernel_>& result) {
 #endif
@@ -563,10 +567,11 @@ public:
 				// raised, so we only delete when minkowski (actually the convex_decomposition)
 				// succeed. Otherwise, we just have to incur some memory leak.
 				// @todo report this to cgal.
+				// Still an issue on 5.2. valgrind reports an error as well.
+				
 				delete item_nef_copy;
 				result_set = true;
-			}
-			catch (CGAL::Failure_exception&) {
+			} catch (CGAL::Failure_exception&) {
 				failed = true;
 				std::cerr << "Minkowski on volume failed, retrying with individual triangles" << std::endl;
 			}
@@ -625,7 +630,7 @@ public:
 			minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
 				poly_triangulated.facets_begin(),
 				poly_triangulated.facets_end(),
-				padding_volume, result
+				padding_volume_2, result
 				);
 			result.transform(item.transformation);
 
@@ -755,41 +760,43 @@ public:
 	}
 };
 
-void radius_execution_context::operator()(shape_callback_item& item) {
-	auto it = first_product_for_geom_id.find(item.geom_reference);
+void radius_execution_context::operator()(shape_callback_item* item) {
+	auto it = first_product_for_geom_id.find(item->geom_reference);
 	if (it != first_product_for_geom_id.end()) {
-		if (it->second != item.src) {
-			if (reused_products.find(item.src) == reused_products.end()) {
+		if (it->second != item->src) {
+			if (reused_products.find(item->src) == reused_products.end()) {
 				std::cout << "Reused " << it->second << std::endl;
-				reused_products.insert({ item.src, {
+				reused_products.insert({ item->src, {
 					it->second,
 					placements.find(it->second)->second,
-					item.transformation}
+					item->transformation}
 					});
 			}
 			return;
 		}
 	}
 	else {
-		first_product_for_geom_id.insert(it, { item.geom_reference, item.src });
+		first_product_for_geom_id.insert(it, { item->geom_reference, item->src });
 		// placements only need to be inserted once.
-		placements[item.src] = item.transformation.inverse();
+		placements[item->src] = item->transformation.inverse();
 	}
 
-	product_geometries[item.src].emplace_back();
-	auto result_nef = std::ref(product_geometries[item.src].back());
-	// auto result_nef = &product_geometries[item.src].back();
-	process_shape_item task(radius, minkowski_triangles_, (bool) threads_, construct_padding_volume_());
-
+	product_geometries[item->src].emplace_back();
+	auto result_nef = &product_geometries[item->src].back();
+	process_shape_item* task = new process_shape_item(radius, minkowski_triangles_, (bool) threads_);
+	
+	padding_volumes_.push_back({construct_padding_volume_(), construct_padding_volume_()});
+	auto& pp = padding_volumes_.back();
+		
 	if (!threads_) {
-		task(item, result_nef);
-	}
-	else {
+		(*task)(item, result_nef, &pp.first, &pp.second);
+	} else {
+		/*
 		bool placed = false;
 		while (!placed) {
 			for (auto& fu : threadpool_) {
 				if (!fu.valid()) {					
-					fu = std::async(std::launch::async, std::move(task), item, result_nef);
+					fu = std::async(std::launch::async, std::ref(*task), item, result_nef);
 					placed = true;
 					break;
 				}
@@ -806,13 +813,30 @@ void radius_execution_context::operator()(shape_callback_item& item) {
 						catch (...) {
 							std::cerr << "unkown error" << std::endl;
 						}
-						fu = std::async(std::launch::async, std::move(task), item, result_nef);
+						fu = std::async(std::launch::async, std::ref(*task), item, result_nef);
 						placed = true;
 						break;
 					}
 				}
 			}
 		}
+		*/
+		
+		while (threadpool_.size() == threads_) {
+			for (size_t i = 0; i < threadpool_.size(); ++i) {
+				std::future<void> &fu = threadpool_[i];
+				std::future_status status = fu.wait_for(std::chrono::seconds(0));
+				if (status == std::future_status::ready) {
+					fu.get();
+					
+					std::swap(threadpool_[i], threadpool_.back());
+					threadpool_.pop_back();
+				}
+			}
+		}
+		
+		std::future<void> fu = std::async(std::launch::async, *task, item, result_nef, &pp.first, &pp.second);
+		threadpool_.emplace_back(std::move(fu));
 	}
 	
 }
@@ -934,12 +958,23 @@ cgal_shape_t radius_execution_context::extract(const cgal_shape_t& input, extrac
 void radius_execution_context::set_threads(size_t n) {
 	if (!threads_) {
 		threads_ = n;
-		threadpool_.resize(n);
+		// threadpool_.resize(n);
+		/*
+		padding_volumes_.resize(n);
+		padding_vol_ptr_.resize(n);
+		for (size_t i = 0; i < n; ++i) {
+			padding_volumes_[i] = std::make_pair(construct_padding_volume_(), construct_padding_volume_());
+			padding_vol_ptr_[i] = &padding_volumes_[i];
+		}
+		*/		
 	}	
 }
 
 // Completes the boolean union, extracts exterior and erodes padding radius
 void radius_execution_context::finalize() {
+
+	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > union_collector;
+
 	for (auto& fu : threadpool_) {
 		if (fu.valid()) {
 			try {
@@ -978,12 +1013,12 @@ void radius_execution_context::finalize() {
 	}
 
 	// @todo spatial sorting?
-	boolean_result = union_collector.get_union();
+	auto boolean_result = union_collector.get_union();
 	// boolean_result.extract_regularization();
 	T.stop();
 
 	if (no_erosion_) {
-		exterior = boolean_result;
+		auto exterior = boolean_result;
 
 		if (exterior.is_simple()) {
 			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
@@ -1018,7 +1053,9 @@ void radius_execution_context::finalize() {
 				return;
 			}
 
-			cluster_vertices(poly_simple, ico_edge_length / 2.);
+			if (!cluster_vertices(poly_simple, ico_edge_length / 2.)) {
+				return;
+			}
 
 			poly_simple.normalize_border();
 			if (!poly_simple.is_valid(false, 1)) {
@@ -1122,7 +1159,9 @@ void radius_execution_context::finalize() {
 				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
 			}
 
-			cluster_vertices(polyhedron_exterior, ico_edge_length  / 2.);
+			if (!cluster_vertices(polyhedron_exterior, ico_edge_length  / 2.)) {
+				return;
+			}
 
 			{
 				simple_obj_writer tmp_debug("debug-after-custering-again");
@@ -1132,7 +1171,10 @@ void radius_execution_context::finalize() {
 			// util::copy::polyhedron(polyhedron_exterior, poly_simple);
 		}
 		else {
-
+			throw std::runtime_error("todo");
+			
+			/*	
+		
 			{
 				simple_obj_writer tmp_debug("debug-exterior");
 				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
@@ -1147,7 +1189,7 @@ void radius_execution_context::finalize() {
 			complement.extract_regularization();
 			// @nb padding cube is potentially slightly larger to result in a thinner result
 			// then another radius for comparison.
-			complement_padded = CGAL::minkowski_sum_3(complement, padding_volume_2);
+			complement_padded = complement; // CGAL::minkowski_sum_3(complement, padding_volume_2);
 			complement_padded.extract_regularization();
 			T2.stop();
 
@@ -1193,6 +1235,7 @@ void radius_execution_context::finalize() {
 				std::cerr << "unable to triangulate all faces" << std::endl;
 				return;
 			}
+			auto padding_volume = construct_padding_volume_();
 			minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
 				poly_triangulated.facets_begin(),
 				poly_triangulated.facets_end(),
@@ -1207,6 +1250,7 @@ void radius_execution_context::finalize() {
 
 			extract_in_place(polyhedron_exterior, SECOND_LARGEST_AREA);
 #endif
+			*/
 
 		}
 

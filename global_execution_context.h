@@ -40,7 +40,7 @@ struct global_execution_context : public execution_context {
 
 	global_execution_context();
 
-	void operator()(shape_callback_item& item);
+	void operator()(shape_callback_item* item);
 
 	void finalize();
 

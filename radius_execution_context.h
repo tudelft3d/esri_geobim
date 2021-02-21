@@ -63,8 +63,7 @@ struct radius_execution_context : public execution_context {
 	radius_settings settings_;
 	std::string radius_str;
 	double radius, ico_edge_length;
-	CGAL::Nef_nary_union_3< CGAL::Nef_polyhedron_3<Kernel_> > union_collector;
-	CGAL::Nef_polyhedron_3<Kernel_> padding_volume, padding_volume_2, boolean_result, exterior, bounding_box, complement, complement_padded;
+	// CGAL::Nef_polyhedron_3<Kernel_> boolean_result, exterior, bounding_box, complement, complement_padded;
 	cgal_shape_t polyhedron_exterior;
 	enum extract_component { INTERIOR, EXTERIOR, LARGEST_AREA, SECOND_LARGEST_AREA };
 	bool minkowski_triangles_, no_erosion_, empty_;
@@ -81,10 +80,14 @@ struct radius_execution_context : public execution_context {
 
 	IfcUtil::IfcBaseEntity* previous_src = nullptr;
 	std::string previous_geom_ref;
-	lazy_nary_union<CGAL::Nef_polyhedron_3<Kernel_> > per_product_collector;
+	// lazy_nary_union<CGAL::Nef_polyhedron_3<Kernel_> > per_product_collector;
 	cgal_placement_t last_place;
 
 	std::vector< std::future<void> > threadpool_;
+	std::list< std::pair<CGAL::Nef_polyhedron_3<Kernel_>, CGAL::Nef_polyhedron_3<Kernel_> >  > padding_volumes_;
+	// Extra indirection for easy swaps
+	// Not used currently
+	std::vector< std::pair<CGAL::Nef_polyhedron_3<Kernel_>, CGAL::Nef_polyhedron_3<Kernel_> >* > padding_vol_ptr_;
 
 	void set_threads(size_t n);
 	
@@ -101,7 +104,7 @@ struct radius_execution_context : public execution_context {
 
 	// + map for reused items
 	// + finalize() does insertion in n-ary_bool
-	void operator()(shape_callback_item& item);
+	void operator()(shape_callback_item* item);
 
 	// Extract the exterior component of a CGAL Polyhedron
 	cgal_shape_t extract(const cgal_shape_t& input, extract_component component) const;
