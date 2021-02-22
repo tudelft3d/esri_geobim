@@ -86,15 +86,15 @@ void global_execution_context<TreeKernel>::operator()(shape_callback_item* item)
 	};
 	infos.push_back(info);
 
-	TreeShapeType tree_polyhedron;
-	util::copy::polyhedron(tree_polyhedron, item->polyhedron);
-
-	typename TreeKernel::Aff_transformation_3 transformation;
-	util::copy::transformation(transformation, item->transformation);
+	// typename TreeKernel::Aff_transformation_3 transformation;
+	// util::copy::transformation(transformation, item->transformation);
 
 	std::transform(
-		tree_polyhedron.points_begin(), tree_polyhedron.points_end(),
-		tree_polyhedron.points_begin(), transformation);
+		item->polyhedron.points_begin(), item->polyhedron.points_end(),
+		item->polyhedron.points_begin(), item->transformation);
+
+	TreeShapeType tree_polyhedron;
+	util::copy::polyhedron(tree_polyhedron, item->polyhedron);
 
 	triangulated_shape_memory.push_back(tree_polyhedron);
 	CGAL::Polygon_mesh_processing::triangulate_faces(triangulated_shape_memory.back());
