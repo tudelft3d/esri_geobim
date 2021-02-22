@@ -1018,7 +1018,7 @@ void radius_execution_context::finalize() {
 	T.stop();
 
 	if (no_erosion_) {
-		auto exterior = boolean_result;
+		exterior = boolean_result;
 
 		if (exterior.is_simple()) {
 			polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
@@ -1173,8 +1173,6 @@ void radius_execution_context::finalize() {
 		else {
 			throw std::runtime_error("todo");
 			
-			/*	
-		
 			{
 				simple_obj_writer tmp_debug("debug-exterior");
 				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
@@ -1250,8 +1248,6 @@ void radius_execution_context::finalize() {
 
 			extract_in_place(polyhedron_exterior, SECOND_LARGEST_AREA);
 #endif
-			*/
-
 		}
 
 		T2.stop();

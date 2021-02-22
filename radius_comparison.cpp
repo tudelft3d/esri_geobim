@@ -6,8 +6,6 @@
 CGAL::Nef_polyhedron_3<Kernel_> create_bounding_box(const cgal_shape_t & input, double radius);
 
 radius_comparison::hollow_solid::hollow_solid(radius_execution_context & a, double d) {
-	throw std::runtime_error("todo");
-	/*
 	D = d;
 	bbox = create_bounding_box(a.polyhedron_exterior, a.radius);
 	complement = bbox - a.exterior;
@@ -25,7 +23,6 @@ radius_comparison::hollow_solid::hollow_solid(radius_execution_context & a, doub
 	}
 	hollow = a.exterior - inner;
 	hollow.extract_regularization();
-	*/
 }
 
 #define MAKE_OP2_NARROWER -2e-7

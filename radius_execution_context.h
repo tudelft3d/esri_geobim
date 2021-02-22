@@ -63,7 +63,7 @@ struct radius_execution_context : public execution_context {
 	radius_settings settings_;
 	std::string radius_str;
 	double radius, ico_edge_length;
-	// CGAL::Nef_polyhedron_3<Kernel_> boolean_result, exterior, bounding_box, complement, complement_padded;
+	CGAL::Nef_polyhedron_3<Kernel_> exterior;
 	cgal_shape_t polyhedron_exterior;
 	enum extract_component { INTERIOR, EXTERIOR, LARGEST_AREA, SECOND_LARGEST_AREA };
 	bool minkowski_triangles_, no_erosion_, empty_;

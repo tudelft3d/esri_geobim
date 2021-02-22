@@ -29,11 +29,11 @@ int main(int argc, char** argv) {
 	global_execution_context<CGAL::Epick> global_context;
 	global_execution_context<Kernel_> global_context_exact;
 
-	shape_callback callback;
+	shape_callback callback_global;
 	if (settings.exact_segmentation) {
-		callback.contexts.push_back(&global_context_exact);
+		callback_global.contexts.push_back(&global_context_exact);
 	} else {
-		callback.contexts.push_back(&global_context);
+		callback_global.contexts.push_back(&global_context);
 	}
 
 #ifdef GEOBIM_DEBUG
@@ -43,12 +43,15 @@ int main(int argc, char** argv) {
 	std::unique_ptr<process_geometries> p;
 
 	if (settings.radii.empty()) {
+		// @todo
+		/*
 		auto cec = new capturing_execution_context;
 		callback.contexts.push_back(cec);
 		p = std::make_unique<process_geometries>(settings);
 		(*p)(std::ref(callback));
 		auto R = binary_search(cec->items.begin(), cec->items.end(), { "0.001", "0.2" });
 		std::cout << "Largest gap found with R / 2 ~ " << R << std::endl;
+		*/
 	} else {
 		std::vector<std::unique_ptr<radius_execution_context>> radius_contexts;
 		bool first = true;
@@ -65,12 +68,21 @@ int main(int argc, char** argv) {
 			}
 		}
 
-		for (auto& c : radius_contexts) {
-			callback.contexts.push_back(&*c);
-		}
+		capturing_execution_context cec;
 
 		p = std::make_unique<process_geometries>(settings);
-		(*p)(std::ref(callback));
+		(*p)(std::ref(cec));
+
+		{
+			shape_callback callback;
+			for (auto& c : radius_contexts) {
+				callback.contexts.push_back(&*c);
+			}
+
+			cec.run(std::ref(callback));
+		}
+
+		cec.run(std::ref(callback_global));
 
 		std::cout << "done processing geometries" << std::endl;
 

@@ -49,6 +49,13 @@ struct capturing_execution_context : public execution_context {
 	void operator()(shape_callback_item* item) {
 		items.push_back(item);
 	}
+
+	template <typename Fn>
+	void run(Fn fn) {
+		for (auto& i : items) {
+			fn(i);
+		}
+	}
 };
 
 // A structure for recieving processed shapes simply defers to a vector of contexts
