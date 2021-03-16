@@ -12,6 +12,13 @@
 
 #include <string>
 
+template <typename K>
+struct non_manifold_polyhedron {
+	typedef CGAL::Point_3<K> P;
+	std::vector<P> points;
+	std::vector<std::vector<size_t>> indices;
+};
+
 // Light weight representation to be stored in global exec context
 struct rgb : public std::pair<double, std::pair<double, double>> {
 	rgb(double r, double g, double b)

@@ -18,6 +18,39 @@ void global_execution_context<TreeKernel>::finalize() {
 	tree.accelerate_distance_queries();
 }
 
+// @todo this should be merged with the other implementation below.
+template<typename TreeKernel>
+typename global_execution_context<TreeKernel>::segmentation_return_type_2 global_execution_context<TreeKernel>::segment(const non_manifold_polyhedron<CGAL::Simple_cartesian<double>>& input) {
+	segmentation_return_type_2 result(infos.size());
+	auto it = infos.begin();
+	for (size_t i = 0; i < infos.size(); ++i, ++it) {
+		result[i].first = i ? *it : nullptr;
+	}
+
+	CGAL::Cartesian_converter<CGAL::Simple_cartesian<double>, TreeKernel> converter;
+
+	for (auto it = input.indices.begin(); it != input.indices.end(); ++it) {
+
+		auto f_c = CGAL::centroid(
+			input.points[(*it)[0]],
+			input.points[(*it)[1]],
+			input.points[(*it)[2]]
+		);
+
+		auto f_c_ic = converter(f_c);
+
+		auto pair = tree.closest_point_and_primitive(f_c_ic);
+		typename TreeShapeType::Face_handle F = pair.second.first;
+		auto jt = facet_to_info.find(F);
+		if (jt != facet_to_info.end()) {
+			int sid = std::distance(infos.cbegin(), std::find(infos.cbegin(), infos.cend(), jt->second));
+			result[sid].second.push_back(it);
+		}
+	}
+
+	return result;
+}
+
 template<typename TreeKernel>
 typename global_execution_context<TreeKernel>::segmentation_return_type global_execution_context<TreeKernel>::segment(const cgal_shape_t & input) {
 	segmentation_return_type result(infos.size());

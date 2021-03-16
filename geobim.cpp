@@ -17,6 +17,20 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/classification.hpp>
 
+namespace {
+	template <typename W>
+	struct output_writer {
+		W& w;
+
+		template <typename R>
+		void operator()(R& r) {
+			for (auto& p : r) {
+				w(p.first, p.second.begin(), p.second.end());
+			}
+		}
+	};
+}
+
 int main(int argc, char** argv) {
 	Logger::SetOutput(&std::cerr, &std::cerr);
 	Logger::Verbosity(Logger::LOG_NOTICE);
@@ -110,41 +124,62 @@ int main(int argc, char** argv) {
 
 		for (auto& c : radius_contexts) {
 			auto T0 = timer::measure("semantic_segmentation");
-			global_execution_context<Kernel_>::segmentation_return_type style_facet_pairs;
-			if (settings.exact_segmentation) {
-				style_facet_pairs = global_context_exact.segment(c->polyhedron_exterior);
-			} else {
-				style_facet_pairs = global_context.segment(c->polyhedron_exterior);
-			}
-			T0.stop();
-
-			city_json_writer write_city(settings.output_filename + c->radius_str);
-			for (auto& p : style_facet_pairs) {
-				write_city(p.first, p.second.begin(), p.second.end());
-			}
-			write_city.finalize();
-
-			simple_obj_writer write_obj(settings.output_filename + c->radius_str);
-			for (auto& p : style_facet_pairs) {
-				write_obj(p.first, p.second.begin(), p.second.end());
-			}
-			write_obj.finalize();
 
 			std::list<item_info*> all_infos;
 
 			if (settings.exact_segmentation) {
 				all_infos = global_context_exact.all_item_infos();
-			} else {
+			}
+			else {
 				all_infos = global_context.all_item_infos();
 			}
 
+			// pop the first 'empty' info
 			all_infos.pop_front();
 
+			city_json_writer write_city(settings.output_filename + c->radius_str);
+			simple_obj_writer write_obj(settings.output_filename + c->radius_str);
 			external_element_collector write_elem(settings.output_filename + ".external", all_infos);
-			for (auto& p : style_facet_pairs) {
-				write_elem(p.first, p.second.begin(), p.second.end());
+
+			boost::variant<
+				global_execution_context<Kernel_>::segmentation_return_type,
+				global_execution_context<Kernel_>::segmentation_return_type_2
+			> style_facet_pairs;
+
+			if (settings.spherical_padding) {
+				if (settings.exact_segmentation) {
+					style_facet_pairs = global_context_exact.segment(c->polyhedron_exterior_nm);
+				} else {
+					style_facet_pairs = global_context.segment(c->polyhedron_exterior_nm);
+				}
+				write_city.point_lookup = &c->polyhedron_exterior_nm.points;
+				write_obj.point_lookup = &c->polyhedron_exterior_nm.points;
+				write_elem.point_lookup = &c->polyhedron_exterior_nm.points;
+			} else if (settings.exact_segmentation) {
+				style_facet_pairs = global_context_exact.segment(c->polyhedron_exterior);
+			} else {
+				style_facet_pairs = global_context.segment(c->polyhedron_exterior);
 			}
-			write_elem.finalize();
+
+			T0.stop();
+
+			{	
+				output_writer<city_json_writer> vis{ write_city };
+				boost::apply_visitor(vis, style_facet_pairs);
+				write_city.finalize();
+			}
+
+			{
+				output_writer<simple_obj_writer> vis{ write_obj };
+				boost::apply_visitor(vis, style_facet_pairs);
+				write_obj.finalize();
+			}
+
+			{
+				output_writer<external_element_collector> vis{ write_elem };
+				boost::apply_visitor(vis, style_facet_pairs);
+				write_elem.finalize();
+			}
 		}
 
 		auto T2 = timer::measure("difference_overlay");

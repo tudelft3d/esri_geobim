@@ -18,9 +18,14 @@ struct global_execution_context : public execution_context {
 	typedef typename AAbbTraits::Bounding_box Bounding_box;
 	typedef CGAL::AABB_tree<AAbbTraits> AAbbTree;
 	typedef typename AAbbTree::Primitive_id Primitive_id;
+	
 	typedef std::vector<std::pair<
 		item_info*,
 		std::list<cgal_shape_t::Facet_handle>>> segmentation_return_type;
+
+	typedef std::vector<std::pair<
+		item_info*,
+		std::list<std::vector<std::vector<size_t>>::const_iterator>>> segmentation_return_type_2;
 
 	AAbbTree tree;
 	
@@ -45,6 +50,10 @@ struct global_execution_context : public execution_context {
 	void finalize();
 
 	segmentation_return_type segment(const cgal_shape_t& input);
+
+	typedef CGAL::Simple_cartesian<double>::Point_3 P3;
+	std::vector<P3>* point_lookup;
+	segmentation_return_type_2 segment(const non_manifold_polyhedron<CGAL::Simple_cartesian<double>>& input);
 
 	const std::list<item_info*>& all_item_infos() const { return infos; }
 };

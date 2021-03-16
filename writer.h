@@ -40,8 +40,21 @@ struct print_and_clear_point_cache {
 // Abstract writer class that takes triangular facets.
 struct abstract_writer {
 	typedef CGAL::Simple_cartesian<double>::Point_3 P3;
+	std::vector<P3>* point_lookup;
 
 	boost::variant<boost::blank, vertex_cache<cgal_point_t>, vertex_cache<P3>> cache;
+
+	std::array<P3, 3> points_from_facet(std::vector<std::vector<size_t>>::const_iterator f) {
+		return {
+			(*point_lookup)[(*f)[0]],
+			(*point_lookup)[(*f)[1]],
+			(*point_lookup)[(*f)[2]]
+		};
+	}
+
+	std::array<P3, 3> points_from_facet(std::list<std::vector<std::vector<size_t>>::const_iterator>::const_iterator f) {
+		return points_from_facet(*f);
+	}
 
 	std::array<Kernel_::Point_3, 3> points_from_facet(cgal_shape_t::Facet_handle f) {
 		return {
@@ -57,6 +70,18 @@ struct abstract_writer {
 				f->facet_begin()->next()->vertex()->point(),
 				f->facet_begin()->next()->next()->vertex()->point()
 		};
+	}
+
+	std::array<size_t, 3> point_indices_from_facet(std::vector<std::vector<size_t>>::const_iterator f) {
+		return {
+			(*f)[0],
+			(*f)[1],
+			(*f)[2]
+		};
+	}
+
+	std::array<size_t, 3> point_indices_from_facet(std::list<std::vector<std::vector<size_t>>::const_iterator>::const_iterator f) {
+		return point_indices_from_facet(*f);
 	}
 
 	template <typename T>
@@ -292,14 +317,11 @@ struct external_element_collector : public abstract_writer {
 	const std::list<item_info*>& all_infos;
 	std::set<const item_info*> part_of_exterior;
 
-	json data;
 
 	external_element_collector(const std::string& fn_prefix, const std::list<item_info*>& infos)
 		: filename(fn_prefix + ".json")
 		, all_infos(infos)
-	{
-		data = json::array();
-	}
+	{}
 
 	template <typename It>
 	void operator()(const item_info* info, It begin, It end) {
@@ -309,11 +331,16 @@ struct external_element_collector : public abstract_writer {
 	}
 
 	void do_finalize() {
+		json data = json::array();
+
 		for (auto& info : all_infos) {
 			json object = json::object();
 			object["guid"] = info->guid;
 			object["is_external"] = part_of_exterior.find(info) != part_of_exterior.end();
+
+			data.push_back(object);
 		}
+
 		std::ofstream(filename.c_str()) << data;
 	}
 };

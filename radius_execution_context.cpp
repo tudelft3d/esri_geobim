@@ -28,29 +28,88 @@ static double MAKE_OP2_NARROWER = ENSURE_2ND_OP_NARROWER ? -2e-7 : 0.0;
 
 namespace {
 	template <typename K>
-	struct average_point {
+	struct average_vector {
 		CGAL::Vector_3<K> accum;
 		size_t n = 0;
 
-		void add(const CGAL::Point_3<K>& p) {
-			accum += p - CGAL::ORIGIN;
+		void add(const CGAL::Vector_3<K>& p) {
+			accum += p;
 			n += 1;
 		}
 
-		operator CGAL::Point_3<K>() const {
-			return CGAL::ORIGIN + accum / n;
+		operator CGAL::Vector_3<K>() const {
+			return accum / n;
 		}
 	};
 
+	template <typename K>
+	struct average_point {
+		average_vector<K> accum;
+
+		void add(const CGAL::Point_3<K>& p) {
+			accum.add(p - CGAL::ORIGIN);
+		}
+
+		operator CGAL::Point_3<K>() const {
+			return CGAL::ORIGIN + (CGAL::Vector_3<K>) accum;
+		}
+	};
+
+	template <typename K>
+	void compute_vertex_normals(const non_manifold_polyhedron<K>& input, std::vector<CGAL::Vector_3<K>>& result) {
+		
+		std::vector<CGAL::Vector_3<K>> face_normals;
+		face_normals.reserve(input.indices.size());
+
+		K traits;
+
+
+		for (auto& idxs : input.indices) {
+			const auto& p0 = input.points[idxs[0]];
+			const auto& p1 = input.points[idxs[1]];
+			const auto& p2 = input.points[idxs[2]];
+
+			// https://github.com/CGAL/cgal/blob/1442c769c72f552bbd284733760958982e300cf7/
+			//     Polygon_mesh_processing/include/CGAL/Polygon_mesh_processing/compute_normal.h#L69
+			auto n = traits.construct_cross_product_vector_3_object()(
+				traits.construct_vector_3_object()(p1, p2),
+				traits.construct_vector_3_object()(p1, p0));
+
+			face_normals.push_back(
+				traits.construct_scaled_vector_3_object()(n, K::FT(1) / K::FT(2))
+			);
+		}
+
+		std::vector<std::vector<size_t>> facets_per_vertex(input.points.size());
+		for (auto it = input.indices.begin(); it != input.indices.end(); ++it) {
+			for (auto& i : *it) {
+				facets_per_vertex[i].push_back(std::distance(input.indices.begin(), it));
+			}
+		}
+
+		for (auto& idxs : facets_per_vertex) {
+			// @todo there is no point in using average_vector as we normalize anyway
+			average_vector<K> accum;
+			for (auto& i : idxs) {
+				accum.add(face_normals[i]);
+			}
+			CGAL::Vector_3<K> v = accum;
+			const K::FT norm = CGAL::approximate_sqrt(traits.compute_squared_length_3_object()(v));
+			if (norm != K::FT(0))
+			{
+				v = traits.construct_divided_vector_3_object()(v, norm);
+			}
+			result.push_back(v);
+		}
+	}
+
 	// @todo this should not be based on euclidean distance, but rather distance over edge/face as it will now close holes which is not the intention
-	template <typename T>
-	bool cluster_vertices(T& s, double r) {
-		typedef typename T::Traits::Kernel K;
+	template <typename K>
+	bool cluster_vertices(non_manifold_polyhedron<K>& s, non_manifold_polyhedron<K>& result, double r) {
 		typedef CGAL::Point_3<K> P;
 
-		std::vector<P> points;
-		std::vector<std::vector<size_t>> indices;
-		CGAL::Polygon_mesh_processing::polygon_mesh_to_polygon_soup(s, points, indices);
+		auto& points = s.points;
+		auto& indices = s.indices;
 
 		std::map<P, size_t> clusters;
 		boost::associative_property_map<std::map<P, size_t>> clusters_map(clusters);
@@ -100,6 +159,7 @@ namespace {
 			}
 		}
 
+		/*
 		std::ofstream fs2("points.txt");
 		fs2 << "[\n";
 		for (auto& p : new_points) {
@@ -129,15 +189,18 @@ namespace {
 
 		for (auto& p : edge_use) {
 			if (p.second != 2) {
-				std::cerr << "non-manifold: " << p.first.first << " " << p.first.second << std::endl;
 				return false;
-				std::cerr << "attach debugger and press key" << std::endl;
-				std::cin.get();
 			}
 		}
 
-		std::cerr << "removed points: " << CGAL::Polygon_mesh_processing::remove_isolated_points_in_polygon_soup(new_points, new_indices) << std::endl;
+		std::cerr << "removed points: " <<  << std::endl;
+		*/
 
+		CGAL::Polygon_mesh_processing::remove_isolated_points_in_polygon_soup(new_points, new_indices);
+
+		result = { new_points, new_indices };
+
+		/*			
 		auto v = CGAL::Polygon_mesh_processing::is_polygon_soup_a_polygon_mesh(new_indices);
 		std::cerr << "valid: " << v << std::endl;
 		if (!v) {
@@ -147,20 +210,23 @@ namespace {
 		T new_poly;
 		CGAL::Polygon_mesh_processing::polygon_soup_to_polygon_mesh(new_points, new_indices, new_poly);
 
-		/*
-		for (auto it = new_poly.vertices_begin(); it != new_poly.vertices_begin(); ++it) {
-			if (it != it->halfedge()->vertex()) {
-				auto jt = std::find(new_points.begin(), new_points.end(), it->point());
-				auto NN = std::distance(new_points.begin(), jt);
-				std::cin.get();
-				std::cerr << NN << std::endl;
-			}
-		}
-		*/
-
 		s = new_poly;
+		*/
 		
 		return true;
+	}
+
+	// @todo this should not be based on euclidean distance, but rather distance over edge/face as it will now close holes which is not the intention
+	template <typename K>
+	bool cluster_vertices(const CGAL::Polyhedron_3<K>& s, non_manifold_polyhedron<K>& result, double r) {
+		typedef CGAL::Point_3<K> P;
+
+		std::vector<P> points;
+		std::vector<std::vector<size_t>> indices;
+		CGAL::Polygon_mesh_processing::polygon_mesh_to_polygon_soup(s, points, indices);
+
+		non_manifold_polyhedron<K> nmp{ points, indices };
+		return cluster_vertices(nmp, result, r);
 	}
 }
 
@@ -1053,10 +1119,13 @@ void radius_execution_context::finalize() {
 				return;
 			}
 
-			if (!cluster_vertices(poly_simple, ico_edge_length / 2.)) {
+			non_manifold_polyhedron<TriangleKernel> poly_simple_2;
+
+			if (!cluster_vertices(poly_simple, poly_simple_2, ico_edge_length / 2.)) {
 				return;
 			}
 
+			/*
 			poly_simple.normalize_border();
 			if (!poly_simple.is_valid(false, 1)) {
 				std::cerr << "invalid after clustering" << std::endl;
@@ -1075,6 +1144,8 @@ void radius_execution_context::finalize() {
 				std::cerr << "invalid after conversion" << std::endl;
 				return;
 			}
+
+			*/
 			
 			/*
 			// SMS (again) does not really work, geometrical constraints not sattisfied
@@ -1095,14 +1166,23 @@ void radius_execution_context::finalize() {
 			
 			*/
 
+			std::vector<CGAL::Vector_3<TriangleKernel>> vertex_normals_map;
+			compute_vertex_normals(poly_simple_2, vertex_normals_map);
+
+			auto nit = vertex_normals_map.begin();
+			for (auto it = poly_simple_2.points.begin(); it != poly_simple_2.points.end(); ++it, ++nit) {
+				*it -= *nit * radius;
+			}
+
+			/*
 			// calculate normals
 			std::map<cgal_vertex_descriptor_t, Kernel_::Vector_3> vertex_normals;
 			boost::associative_property_map<std::map<cgal_vertex_descriptor_t, Kernel_::Vector_3>> vertex_normals_map(vertex_normals);
-			CGAL::Polygon_mesh_processing::compute_vertex_normals(polyhedron_exterior, vertex_normals_map);
+			CGAL::Polygon_mesh_processing::compute_vertex_normals(poly_simple_2, vertex_normals_map);
 			
 			std::map<cgal_face_descriptor_t, Kernel_::Vector_3> face_normals;
 			boost::associative_property_map<std::map<cgal_face_descriptor_t, Kernel_::Vector_3>> face_normals_map(face_normals);
-			CGAL::Polygon_mesh_processing::compute_face_normals(polyhedron_exterior, face_normals_map);
+			CGAL::Polygon_mesh_processing::compute_face_normals(poly_simple_2, face_normals_map);
 
 			for (auto& v : vertices(polyhedron_exterior)) {
 
@@ -1135,7 +1215,6 @@ void radius_execution_context::finalize() {
 					vnorm = vertex_normals[v];
 				}
 
-				/*
 				std::cout << "N " << CGAL::to_double(vnorm.cartesian(0))
 					<< " " << CGAL::to_double(vnorm.cartesian(1))
 					<< " " << CGAL::to_double(vnorm.cartesian(2)) << std::endl;
@@ -1143,36 +1222,47 @@ void radius_execution_context::finalize() {
 				std::cout << "p0 " << CGAL::to_double(v->point().cartesian(0))
 					<< " " << CGAL::to_double(v->point().cartesian(1))
 					<< " " << CGAL::to_double(v->point().cartesian(2)) << std::endl;
-				*/
 				
 				v->point() -= vnorm * radius;
 
-				/*
 				std::cout << "p1 " << CGAL::to_double(v->point().cartesian(0))
 					<< " " << CGAL::to_double(v->point().cartesian(1))
 					<< " " << CGAL::to_double(v->point().cartesian(2)) << std::endl;
-				*/
 			}
+			*/
 
+			/*
 			{
 				simple_obj_writer tmp_debug("debug-after-erosion");
 				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
 			}
+			*/
 
-			if (!cluster_vertices(polyhedron_exterior, ico_edge_length  / 2.)) {
-				return;
+			{
+				simple_obj_writer tmp_debug("debug-after-erosion");
+				tmp_debug.point_lookup = &poly_simple_2.points;
+				tmp_debug(nullptr, poly_simple_2.indices.begin(), poly_simple_2.indices.end());
 			}
 
+			cluster_vertices(poly_simple_2, polyhedron_exterior_nm, ico_edge_length / 2.);
+
+			/*
 			{
 				simple_obj_writer tmp_debug("debug-after-custering-again");
 				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
+			}
+			*/
+
+			{
+				simple_obj_writer tmp_debug("debug-after-custering-again");
+				tmp_debug.point_lookup = &polyhedron_exterior_nm.points;
+				tmp_debug(nullptr, polyhedron_exterior_nm.indices.begin(), polyhedron_exterior_nm.indices.end());
 			}
 
 			// util::copy::polyhedron(polyhedron_exterior, poly_simple);
 		}
 		else {
-			throw std::runtime_error("todo");
-			
+		
 			{
 				simple_obj_writer tmp_debug("debug-exterior");
 				tmp_debug(nullptr, polyhedron_exterior.facets_begin(), polyhedron_exterior.facets_end());
