@@ -76,7 +76,7 @@ namespace {
 				traits.construct_vector_3_object()(p1, p0));
 
 			face_normals.push_back(
-				traits.construct_scaled_vector_3_object()(n, K::FT(1) / K::FT(2))
+				traits.construct_scaled_vector_3_object()(n, typename K::FT(1) / typename K::FT(2))
 			);
 		}
 
@@ -94,8 +94,8 @@ namespace {
 				accum.add(face_normals[i]);
 			}
 			CGAL::Vector_3<K> v = accum;
-			const K::FT norm = CGAL::approximate_sqrt(traits.compute_squared_length_3_object()(v));
-			if (norm != K::FT(0))
+			const typename K::FT norm = CGAL::approximate_sqrt(traits.compute_squared_length_3_object()(v));
+			if (norm != typename K::FT(0))
 			{
 				v = traits.construct_divided_vector_3_object()(v, norm);
 			}
