@@ -26,7 +26,7 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 		("exclude,x", "entities are to be excluded")
 		("files", po::value<std::vector<std::string>>()->multitoken(), "input and output filenames")
 		("output-file", new po::typed_value<std::string, char>(&settings.output_filename), "output OBJ file")
-		("radii", new po::typed_value<std::string, char>(&radii), "semicolon separated list of radii")
+		("radii", new po::typed_value<std::string, char>(&radii), "comma separated list of radii")
 		("threads,j", po::value(&threads), "number of processing threads")
 		;
 
@@ -62,7 +62,7 @@ int parse_command_line(geobim_settings& settings, int argc, char ** argv) {
 
 	// using Kernel_::FT creates weird segfaults, probably due to how ifopsh constructs the box, coordinates components cannot be shared?
 	if (vmap.count("radii")) {
-		boost::split(settings.radii, vmap["radii"].as<std::string>(), boost::is_any_of(";"));
+		boost::split(settings.radii, vmap["radii"].as<std::string>(), boost::is_any_of(","));
 		std::sort(settings.radii.begin(), settings.radii.end(), [](const std::string& s, const std::string& t) {
 			return boost::lexical_cast<double>(s) < boost::lexical_cast<double>(t);
 		});

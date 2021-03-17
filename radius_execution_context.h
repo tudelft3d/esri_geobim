@@ -64,6 +64,8 @@ struct radius_execution_context : public execution_context {
 	std::string radius_str;
 	double radius, ico_edge_length;
 	CGAL::Nef_polyhedron_3<Kernel_> exterior;
+
+	bool narrower_ = false;
 	
 	cgal_shape_t polyhedron_exterior;
 	non_manifold_polyhedron<CGAL::Simple_cartesian<double>> polyhedron_exterior_nm;

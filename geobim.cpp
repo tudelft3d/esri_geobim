@@ -187,8 +187,8 @@ int main(int argc, char** argv) {
 		for (auto jt = it + 1; jt != radius_contexts.end(); ++it, ++jt) {
 			radius_comparison difference(**it, **jt, 0.001);
 			simple_obj_writer obj("difference-"
-				+ boost::lexical_cast<std::string>((*it)->radius) + "-"
-				+ boost::lexical_cast<std::string>((*jt)->radius));
+				+ (*it)->radius_str + "-"
+				+ (*jt)->radius_str);
 			obj(nullptr, difference.difference_poly.facets_begin(), difference.difference_poly.facets_end());
 		}
 		T2.stop();

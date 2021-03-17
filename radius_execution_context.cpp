@@ -24,7 +24,6 @@
 #include <CGAL/Polygon_mesh_processing/repair_polygon_soup.h>
 
 static bool ENSURE_2ND_OP_NARROWER = true;
-static double MAKE_OP2_NARROWER = ENSURE_2ND_OP_NARROWER ? -2e-7 : 0.0;
 
 namespace {
 	template <typename K>
@@ -237,18 +236,8 @@ radius_execution_context::radius_execution_context(const std::string& r, radius_
 	, minkowski_triangles_(rs.get(radius_settings::MINKOWSKI_TRIANGLES))
 	, no_erosion_(rs.get(radius_settings::NO_EROSION))
 	, empty_(false) // no longer relevant, bug fixed
-{
-	/*
-	padding_volume = construct_padding_volume_(radius);
-	if (ENSURE_2ND_OP_NARROWER && rs.get(radius_settings::NARROWER)) {
-		double r2 = radius + 1e-7;
-		padding_volume_2 = construct_padding_volume_(r2);
-	}
-	else {
-		padding_volume_2 = padding_volume;
-	}
-	*/
-}
+	, narrower_(ENSURE_2ND_OP_NARROWER && rs.get(radius_settings::NARROWER))
+{}
 
 CGAL::Nef_polyhedron_3<Kernel_> radius_execution_context::construct_padding_volume_(const boost::optional<double>& R) {
 	double radius = R.get_value_or(this->radius);
@@ -1323,12 +1312,17 @@ void radius_execution_context::finalize() {
 				std::cerr << "unable to triangulate all faces" << std::endl;
 				return;
 			}
-			auto padding_volume = construct_padding_volume_();
+
+			auto padding_volume = construct_padding_volume_(narrower_ 
+				? (this->radius + 1e-7) // sightly higher so volume get's a little bit inset
+				: this->radius);
+
 			minkowski_sum_triangles_single_threaded<CGAL::Polyhedron_3<CGAL::Epick>>(
 				poly_triangulated.facets_begin(),
 				poly_triangulated.facets_end(),
 				padding_volume, exterior
 				);
+
 			if (exterior.is_simple()) {
 				polyhedron_exterior = ifcopenshell::geometry::utils::create_polyhedron(exterior);
 			}
