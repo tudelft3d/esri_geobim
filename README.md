@@ -1,6 +1,10 @@
 GeoBIM application
 ==================
 
+> #### :warning: Update July 2023
+> 
+> This repository is now also available as a submodule in IfcOpenShell IfcConvert. Download automated builds from https://github.com/IfcOpenBot/IfcOpenShell/commit/2ac66571b05cede41495cec748989435ea74947d#commitcomment-107123988
+
 Building Information Modelling (BIM) is a fairly novel paradigm in the 
 construction sector in which a multi-disciplinary information in 
 construction is exchanged between stakeholders as a decomposition of 
